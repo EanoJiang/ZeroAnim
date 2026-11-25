@@ -1,6 +1,8 @@
 #pragma once
 
+#include "AlphaBlend.h"
 #include "Animation/AnimInstance.h"
+#include "PlumPoleTraversalComponent.h"
 #include "PlumPoleAnimInstance.generated.h"
 
 class UAnimSequence;
@@ -13,6 +15,7 @@ struct FPlumPoleAnimationFrame
     float FootWeight = 0.0f;
     float Progress = 0.0f;
     float Duration = 0.0f;
+    bool bDecayFootOffset = false;
 };
 
 UCLASS(Transient, Blueprintable)
@@ -27,7 +30,15 @@ public:
 
     /** Play a segment on the traversal clock. A null sequence blends back to the Anim Blueprint. */
     void SetTraversalClip(UAnimSequence* Sequence, bool bLoop, float BlendTime,
-        FVector2D Section, UMirrorDataTable* MirrorTable);
+        FVector2D Section, UMirrorDataTable* MirrorTable,
+        EAlphaBlendOption BlendOption = EAlphaBlendOption::HermiteCubic,
+        EPlumPoleTimeCurve TimeCurve = EPlumPoleTimeCurve::Linear,
+        float PreviousTraversalProgress = -1.0f,
+        float OutgoingRate = 1.0f);
+
+    /** Number of live pose layers (active + blending-out outgoing clips) for runtime diagnostics. */
+    UFUNCTION(BlueprintPure, Category = "Plum Pole|Animation")
+    int32 GetActiveLayerCount() const;
 
 protected:
     virtual void NativeInitializeAnimation() override;

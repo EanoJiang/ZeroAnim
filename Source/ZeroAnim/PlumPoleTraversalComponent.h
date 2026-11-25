@@ -19,6 +19,18 @@ enum class EPlumPoleTraversalState : uint8
     Dismounting
 };
 
+UENUM(BlueprintType)
+enum class EPlumPoleTimeCurve : uint8
+{
+    Linear,
+    NearHop,
+    ForwardFlip
+};
+
+/** Map normalized traversal progress [0, 1] into clip seconds using the V6-measured PBZ rate curve. */
+ZEROANIM_API float EvaluatePlumPoleTimeCurve(
+    EPlumPoleTimeCurve Curve, float StartSeconds, float EndSeconds, float NormalizedProgress);
+
 USTRUCT(BlueprintType)
 struct FPlumPoleTraversalTiming
 {
@@ -90,6 +102,10 @@ public:
     UFUNCTION(BlueprintPure, Category = "Plum Pole")
     APlumPoleActor* GetTargetPole() const;
 
+    /** Returns the pole that pressing Jump from the ground will currently enter, or nullptr when unavailable. */
+    UFUNCTION(BlueprintPure, Category = "Plum Pole")
+    APlumPoleActor* FindEnterablePole() const;
+
     UFUNCTION(BlueprintPure, Category = "Plum Pole")
     float GetTraversalDuration() const { return TraversalDuration; }
 
@@ -98,6 +114,8 @@ public:
 
     UFUNCTION(BlueprintPure, Category = "Plum Pole")
     float GetTraversalProgress() const;
+
+    float GetPreviousTraversalProgress() const { return PreviousTraversalProgress; }
 
     UFUNCTION(BlueprintPure, Category = "Plum Pole")
     float GetTraversalTakeoffProgress() const { return ActiveTiming.TakeoffProgress; }
@@ -137,7 +155,7 @@ private:
     float MaxPoleDrop = 220.0f;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Targeting", meta = (ClampMin = "0", ClampMax = "1"))
-    float EntryAlignment = 0.2f;
+    float EntryAlignment = 0.15f;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Targeting", meta = (ClampMin = "0", ClampMax = "1"))
     float HopAlignment = 0.5f;
@@ -145,24 +163,32 @@ private:
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Targeting", meta = (ClampMin = "0"))
     float InputMemorySeconds = 0.22f;
 
-    /** Continuously hop between poles while movement is held. An explicit jump is required to dismount. */
+    /** Continuously hop or flip between poles using directional movement input (keyboard or gamepad stick). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Plum Pole|Input", meta = (AllowPrivateAccess = "true"))
-    bool bAutoHopWithMovementInput = false;
+    bool bAutoHopWithMovementInput = true;
+
+    /** Dismount onto walkable ground when directional input points away from any reachable pole while perched. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Plum Pole|Input", meta = (AllowPrivateAccess = "true", EditCondition = "bAutoHopWithMovementInput"))
+    bool bAutoDismountWithMovementInput = true;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Input", meta = (ClampMin = "0.01", ClampMax = "1", EditCondition = "bAutoHopWithMovementInput"))
-    float AutoHopInputThreshold = 0.5f;
+    float AutoHopInputThreshold = 0.45f;
+
+    /** Brief hold guard after landing on a terminal pole so late key release never accidentally falls off. */
+    UPROPERTY(EditAnywhere, Category = "Plum Pole|Input", meta = (ClampMin = "0", EditCondition = "bAutoDismountWithMovementInput"))
+    float AutoDismountHoldDelay = 0.22f;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Timing", meta = (ClampMin = "0.1"))
-    float EnterDuration = 0.94f;
+    float EnterDuration = 1.022f;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Timing", meta = (ClampMin = "0.1"))
-    float HopDuration = 1.40f;
+    float HopDuration = 0.862f;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Timing", meta = (ClampMin = "0.1"))
-    float ChainHopDuration = 156.0f / 120.0f;
+    float ChainHopDuration = 0.808f;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Timing", meta = (ClampMin = "0.1"))
-    float DismountDuration = 1.24f;
+    float DismountDuration = 0.833f;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Timing")
     FPlumPoleTraversalTiming EnterTiming;
@@ -181,6 +207,12 @@ private:
     FPlumPoleTraversalTiming PoleFlipTiming;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Forward Flip", meta = (ClampMin = "0.1"))
+    float PoleFlipDuration = 1.022f;
+
+    UPROPERTY(EditAnywhere, Category = "Plum Pole|Forward Flip", meta = (ClampMin = "0.1"))
+    float PoleFlipSectionEndSeconds = 1.310f;
+
+    UPROPERTY(EditAnywhere, Category = "Plum Pole|Forward Flip", meta = (ClampMin = "0.1"))
     float PoleFlipPlayRate = 1.0f;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Timing")
@@ -190,10 +222,10 @@ private:
     float JumpBufferSeconds = 0.32f;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Trajectory", meta = (ClampMin = "0"))
-    float HopHeight = 27.0f;
+    float HopHeight = 3.5f;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Dismount", meta = (ClampMin = "0"))
-    float DismountDistance = 360.0f;
+    float DismountDistance = 220.0f;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Dismount", meta = (ClampMin = "0"))
     float DismountMaxRise = 75.0f;
@@ -202,7 +234,7 @@ private:
     float DismountMaxDrop = 475.0f;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Dismount")
-    bool bFaceAwayFromDismount = true;
+    bool bFaceAwayFromDismount = false;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole|Dismount", meta = (ClampMin = "0"))
     float ShortDismountDistance = 0.0f;
@@ -241,7 +273,7 @@ private:
         const FVector& CarryVelocity = FVector::ZeroVector, EArcStyle Style = EArcStyle::Normal,
         bool bFromCompletedPoleArc = false);
     void AdvanceArc(float DeltaTime);
-    bool TryChainFromPoleArc(float OverflowDelta);
+    bool TryChainFromPoleArc(float OverflowDelta, const FVector& ChainDirection, EArcStyle ChainStyle, bool bAllowDismount);
     void CompletePoleArc();
     void FinishDismount();
     void InterruptArc();
@@ -265,6 +297,8 @@ private:
     EArcStyle BufferedStyle = EArcStyle::Normal;
     EPlumPoleTraversalState TraversalState = EPlumPoleTraversalState::Grounded;
     FVector LastMoveDirection = FVector::ZeroVector;
+    FVector CurrentFrameMoveInput = FVector::ZeroVector;
+    FVector ArrivalDirection = FVector::ZeroVector;
     FVector ExplicitDirection = FVector::ZeroVector;
     float ExplicitInputMagnitude = 0.0f;
     uint64 ExplicitInputFrame = MAX_uint64;
@@ -280,8 +314,11 @@ private:
     float ArcYawDelta = 0.0f;
     float TraversalElapsed = 0.0f;
     float TraversalDuration = 0.0f;
+    float PreviousTraversalProgress = 0.0f;
+    float PerchElapsed = 0.0f;
     bool bArcActive = false;
     bool bMovementLocked = false;
     bool bLastTraversalCompleted = false;
     bool bJustLandedFromHop = false;
+    bool bInputNeutralSincePerch = true;
 };

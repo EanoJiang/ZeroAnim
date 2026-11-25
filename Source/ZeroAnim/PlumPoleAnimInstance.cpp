@@ -14,78 +14,8 @@ namespace
 {
 const FName PelvisBone(TEXT("pelvis"));
 constexpr double MaxFootCorrection = 45.0;
-
-struct FCachedPose
-{
-    TArray<FTransform> Bones;
-    FBlendedHeapCurve Curves;
-    UE::Anim::FHeapAttributeContainer Attributes;
-    uint16 BoneSerial = 0;
-
-    void CopyFrom(const FPoseContext& Source)
-    {
-        Bones = Source.Pose.GetBones();
-        Curves.CopyFrom(Source.Curve);
-        Attributes.CopyFrom(Source.CustomAttributes);
-        BoneSerial = Source.Pose.GetBoneContainer().GetSerialNumber();
-    }
-
-    void CopyFrom(const FCachedPose& Source)
-    {
-        Bones = Source.Bones;
-        Curves.CopyFrom(Source.Curves);
-        Attributes.CopyFrom(Source.Attributes);
-        BoneSerial = Source.BoneSerial;
-    }
-
-    bool Matches(const FPoseContext& Output) const
-    {
-        return Bones.Num() == Output.Pose.GetNumBones()
-            && BoneSerial == Output.Pose.GetBoneContainer().GetSerialNumber();
-    }
-
-    void ApplyTo(FPoseContext& Output) const
-    {
-        Output.Pose.CopyBonesFrom(Bones);
-        Output.Curve.CopyFrom(Curves);
-        Output.CustomAttributes.CopyFrom(Attributes);
-    }
-};
-
-struct FClipPlayback
-{
-    TObjectPtr<UAnimSequence> Sequence;
-    TObjectPtr<UMirrorDataTable> MirrorTable;
-    float Start = 0.0f;
-    float Length = 0.0f;
-    float Rate = 1.0f;
-    float Time = 0.0f;
-    bool bLoop = false;
-    bool bUseTraversalClock = false;
-
-    void Advance(float DeltaSeconds)
-    {
-        if (!bUseTraversalClock && Length > 0.0f)
-        {
-            FAnimationRuntime::AdvanceTime(bLoop, Rate * DeltaSeconds, Time, Length);
-        }
-    }
-
-    bool Sample(FPoseContext& Output, float TraversalProgress) const
-    {
-        const USkeleton* Skeleton = Output.Pose.GetBoneContainer().GetSkeletonAsset();
-        if (!Sequence || !Skeleton || Sequence->GetSkeleton() != Skeleton || Sequence->IsValidAdditive())
-        {
-            return false;
-        }
-
-        FAnimationPoseData PoseData(Output);
-        const float SampleTime = Start + (bUseTraversalClock ? TraversalProgress * Length : Time);
-        const FAnimExtractContext ExtractionContext(SampleTime, false, {}, bLoop);
-        Sequence->GetAnimationPose(PoseData, ExtractionContext);
-        return true;
-    }
-};
+constexpr int32 MaxOutgoingLayers = 6;
+constexpr float DepartureOffsetDecaySeconds = 0.14f;
 
 FTransform GetComponentSpaceBone(const FCompactPose& Pose, FCompactPoseBoneIndex Bone)
 {
@@ -98,7 +28,24 @@ FTransform GetComponentSpaceBone(const FCompactPose& Pose, FCompactPoseBoneIndex
     return ComponentSpace;
 }
 
-void PlantFoot(FCompactPose& Pose, FName FootBone, const FVector& ComponentTarget, float Weight)
+void ApplyPelvisComponentOffset(FCompactPose& Pose, const FVector& ComponentOffset)
+{
+    if (ComponentOffset.IsNearlyZero())
+    {
+        return;
+    }
+    const FBoneContainer& Bones = Pose.GetBoneContainer();
+    const FCompactPoseBoneIndex Pelvis = Bones.MakeCompactPoseIndex(
+        FMeshPoseBoneIndex(Bones.GetPoseBoneIndexForBoneName(PelvisBone)));
+    if (Pelvis.GetInt() == INDEX_NONE)
+    {
+        return;
+    }
+    const FTransform PelvisParent = GetComponentSpaceBone(Pose, Pose.GetParentBoneIndex(Pelvis));
+    Pose[Pelvis].AddToTranslation(PelvisParent.InverseTransformVector(ComponentOffset));
+}
+
+FVector PlantFoot(FCompactPose& Pose, FName FootBone, const FVector& ComponentTarget, float Weight)
 {
     const FBoneContainer& Bones = Pose.GetBoneContainer();
     const FCompactPoseBoneIndex Foot = Bones.MakeCompactPoseIndex(
@@ -107,13 +54,14 @@ void PlantFoot(FCompactPose& Pose, FName FootBone, const FVector& ComponentTarge
         FMeshPoseBoneIndex(Bones.GetPoseBoneIndexForBoneName(PelvisBone)));
     if (Foot.GetInt() == INDEX_NONE || Pelvis.GetInt() == INDEX_NONE)
     {
-        return;
+        return FVector::ZeroVector;
     }
 
     const FVector FootLocation = GetComponentSpaceBone(Pose, Foot).GetLocation();
     const FVector Correction = (ComponentTarget - FootLocation).GetClampedToMaxSize(MaxFootCorrection) * Weight;
     const FTransform PelvisParent = GetComponentSpaceBone(Pose, Pose.GetParentBoneIndex(Pelvis));
     Pose[Pelvis].AddToTranslation(PelvisParent.InverseTransformVector(Correction));
+    return Correction;
 }
 
 struct FMirrorCache
@@ -147,6 +95,94 @@ struct FMirrorCache
     }
 };
 
+struct FClipLayer
+{
+    TObjectPtr<UAnimSequence> Sequence;
+    TObjectPtr<UMirrorDataTable> MirrorTable;
+    FMirrorCache MirrorCache;
+    FAlphaBlend Blend;
+    float SectionStart = 0.0f;
+    float SectionEnd = 0.0f;
+    float FullLength = 0.0f;
+    float Rate = 1.0f;
+    float Time = 0.0f;
+    EPlumPoleTimeCurve TimeCurve = EPlumPoleTimeCurve::Linear;
+    bool bLoop = false;
+    bool bUseTraversalClock = false;
+    bool bHoldingEndPose = false;
+
+    FClipLayer()
+    {
+        Blend.SetBlendOption(EAlphaBlendOption::HermiteCubic);
+        Blend.SetBlendTime(0.0f);
+        Blend.SetValueRange(1.0f, 1.0f);
+        Blend.SetAlpha(1.0f);
+    }
+
+    float GetWeight() const
+    {
+        return FMath::Max(Blend.GetBlendedValue(), 0.0f);
+    }
+
+    float GetSampleTime(float TraversalProgress) const
+    {
+        if (bUseTraversalClock)
+        {
+            return FMath::Clamp(
+                EvaluatePlumPoleTimeCurve(TimeCurve, SectionStart, SectionEnd, TraversalProgress),
+                0.0f, FullLength);
+        }
+        return FMath::Clamp(Time, 0.0f, FullLength);
+    }
+
+    void Advance(float DeltaSeconds)
+    {
+        Blend.Update(DeltaSeconds);
+        if (!bUseTraversalClock && Sequence && FullLength > 0.0f)
+        {
+            if (bLoop)
+            {
+                FAnimationRuntime::AdvanceTime(true, Rate * DeltaSeconds, Time, FullLength);
+                bHoldingEndPose = false;
+            }
+            else if (!bHoldingEndPose)
+            {
+                Time += Rate * DeltaSeconds;
+                if (Time >= FullLength)
+                {
+                    Time = FullLength;
+                    bHoldingEndPose = true;
+                }
+                else if (Time <= 0.0f && Rate < 0.0f)
+                {
+                    Time = 0.0f;
+                    bHoldingEndPose = true;
+                }
+            }
+        }
+    }
+
+    bool Sample(FPoseContext& Output, float TraversalProgress)
+    {
+        const USkeleton* Skeleton = Output.Pose.GetBoneContainer().GetSkeletonAsset();
+        if (!Sequence || !Skeleton || Sequence->GetSkeleton() != Skeleton || Sequence->IsValidAdditive())
+        {
+            return false;
+        }
+
+        FAnimationPoseData PoseData(Output);
+        const float SampleTime = GetSampleTime(TraversalProgress);
+        const FAnimExtractContext ExtractionContext(SampleTime, false, {}, bLoop);
+        Sequence->GetAnimationPose(PoseData, ExtractionContext);
+        MirrorCache.Apply(Output, MirrorTable.Get());
+
+        // Capsule motion drives traversal. A source clip can contain root translation even on frame zero.
+        const FCompactPoseBoneIndex RootBone(0);
+        Output.Pose[RootBone] = Output.Pose.GetRefPose(RootBone);
+        return true;
+    }
+};
+
 class FPlumPoleAnimInstanceProxy final : public FAnimInstanceProxy
 {
 public:
@@ -165,17 +201,33 @@ public:
             return;
         }
 
-        SetPlayback(Sequence, bLoop, PlaybackRate, BlendTime, FVector2D(0.0, 1.0), nullptr, false);
+        SetPlayback(Sequence, bLoop, PlaybackRate, BlendTime, FVector2D(0.0, 1.0), nullptr,
+            false, EAlphaBlendOption::HermiteCubic, EPlumPoleTimeCurve::Linear, -1.0f, 1.0f);
     }
 
     void SetTraversalClip(UAnimSequence* Sequence, bool bLoop, float BlendTime, FVector2D Section,
-        UMirrorDataTable* MirrorTable)
+        UMirrorDataTable* MirrorTable, EAlphaBlendOption BlendOption, EPlumPoleTimeCurve TimeCurve,
+        float PreviousTraversalProgress, float OutgoingRate)
     {
         if (!Current.Sequence && !Sequence)
         {
             return;
         }
-        SetPlayback(Sequence, bLoop, 1.0f, BlendTime, Section, MirrorTable, !bLoop && Sequence != nullptr);
+        SetPlayback(Sequence, bLoop, 1.0f, BlendTime, Section, MirrorTable,
+            !bLoop && Sequence != nullptr, BlendOption, TimeCurve, PreviousTraversalProgress, OutgoingRate);
+    }
+
+    int32 GetActiveLayerCount() const
+    {
+        int32 Count = Current.GetWeight() > KINDA_SMALL_NUMBER ? 1 : 0;
+        for (const FClipLayer& Layer : Outgoing)
+        {
+            if (Layer.GetWeight() > KINDA_SMALL_NUMBER)
+            {
+                ++Count;
+            }
+        }
+        return Count;
     }
 
 protected:
@@ -192,13 +244,21 @@ protected:
     virtual void Update(float DeltaSeconds) override
     {
         Current.Advance(DeltaSeconds);
-        if (BlendElapsed < BlendDuration)
+        for (int32 Index = Outgoing.Num() - 1; Index >= 0; --Index)
         {
-            if (bBlendFromLiveClip)
+            Outgoing[Index].Advance(DeltaSeconds);
+            if (Outgoing[Index].Blend.IsComplete() && Outgoing[Index].GetWeight() <= KINDA_SMALL_NUMBER)
             {
-                Previous.Advance(DeltaSeconds);
+                Outgoing.RemoveAt(Index);
             }
-            BlendElapsed = FMath::Min(BlendElapsed + DeltaSeconds, BlendDuration);
+        }
+        if (Frame.bDecayFootOffset && FootOffsetDecayRemaining > 0.0f)
+        {
+            FootOffsetDecayRemaining = FMath::Max(0.0f, FootOffsetDecayRemaining - DeltaSeconds);
+            if (FootOffsetDecayRemaining <= KINDA_SMALL_NUMBER)
+            {
+                CachedFootOffset = FVector::ZeroVector;
+            }
         }
     }
 
@@ -209,71 +269,129 @@ protected:
             return false;
         }
 
-        const bool bTraversalPose = Current.Sample(Output, Frame.Progress);
-        if (bTraversalPose)
-        {
-            CurrentMirror.Apply(Output, Current.MirrorTable.Get());
-            // Capsule motion drives traversal. A source clip can contain an offset even on frame zero.
-            const FCompactPoseBoneIndex RootBone(0);
-            Output.Pose[RootBone] = Output.Pose.GetRefPose(RootBone);
-        }
-        else if (InRootNode)
-        {
-            EvaluateAnimationNode_WithRoot(Output, InRootNode);
-        }
-        else
-        {
-            Output.ResetToRefPose();
-        }
-
-        const bool bHasFootTarget = bTraversalPose && !Frame.FootBone.IsNone() && Frame.FootWeight > 0.0f;
+        const bool bHasFootTarget = !Frame.FootBone.IsNone() && Frame.FootWeight > 0.0f;
         const FVector ComponentFootTarget = bHasFootTarget
             ? GetComponentTransform().InverseTransformPosition(Frame.FootTarget)
             : FVector::ZeroVector;
 
-        float CurrentWeight = 1.0f;
-        if (BlendElapsed < BlendDuration)
+        auto ApplyFootOffset = [&](FCompactPose& Pose, float TraversalShare)
         {
-            FPoseContext PreviousPose(Output);
-            bool bHasPreviousPose = false;
-            if (bBlendFromLiveClip && Previous.Sample(PreviousPose, 0.0f))
+            if (TraversalShare <= KINDA_SMALL_NUMBER)
             {
-                PreviousMirror.Apply(PreviousPose, Previous.MirrorTable.Get());
-                const FCompactPoseBoneIndex RootBone(0);
-                PreviousPose.Pose[RootBone] = PreviousPose.Pose.GetRefPose(RootBone);
-                if (bHasFootTarget && bPreviousWasTraversalPose)
-                {
-                    PlantFoot(PreviousPose.Pose, Frame.FootBone, ComponentFootTarget, Frame.FootWeight);
-                }
-                bHasPreviousPose = true;
+                CachedFootOffset = FVector::ZeroVector;
+                FootOffsetDecayRemaining = 0.0f;
+                return;
             }
-            else if (!bBlendFromLiveClip && BlendFrom.Matches(Output))
+            if (bHasFootTarget)
             {
-                BlendFrom.ApplyTo(PreviousPose);
-                bHasPreviousPose = true;
+                CachedFootOffset = PlantFoot(Pose, Frame.FootBone, ComponentFootTarget, Frame.FootWeight * TraversalShare);
+                FootOffsetDecayRemaining = DepartureOffsetDecaySeconds;
             }
+            else if (Frame.bDecayFootOffset && FootOffsetDecayRemaining > 0.0f)
+            {
+                const float DecayAlpha = FMath::SmoothStep(0.0f, 1.0f, FootOffsetDecayRemaining / DepartureOffsetDecaySeconds);
+                ApplyPelvisComponentOffset(Pose, CachedFootOffset * (DecayAlpha * TraversalShare));
+            }
+            else
+            {
+                CachedFootOffset = FVector::ZeroVector;
+                FootOffsetDecayRemaining = 0.0f;
+            }
+        };
 
-            if (bHasPreviousPose)
+        // Fast path: no active crossfade layers.
+        if (Outgoing.IsEmpty())
+        {
+            const bool bTraversalPose = Current.Sample(Output, Frame.Progress);
+            if (!bTraversalPose)
             {
-                FAnimationPoseData OutputPoseData(Output);
-                const FAnimationPoseData PreviousPoseData(PreviousPose);
-                const float Alpha = FMath::Clamp(BlendElapsed / BlendDuration, 0.0f, 1.0f);
-                CurrentWeight = bBlendFromLiveClip
-                    ? FMath::SmoothStep(0.0f, 1.0f, Alpha)
-                    : 1.0f - FMath::Square(1.0f - Alpha);
-                FAnimationRuntime::BlendTwoPosesTogetherInPlace(OutputPoseData, PreviousPoseData, CurrentWeight);
+                EvaluateBasePose(Output, InRootNode);
+                ApplyFootOffset(Output.Pose, 0.0f);
             }
+            else
+            {
+                ApplyFootOffset(Output.Pose, 1.0f);
+            }
+            LastTraversalProgress = Frame.Progress;
+            return true;
         }
 
-        if (bHasFootTarget)
+        // Multi-instance blend path (matches PBZ V6 2- and 3-instance Montage overlap).
+        float GroundWeight = 0.0f;
+        float TraversalWeight = 0.0f;
+        float AccumWeight = 0.0f;
+        bool bHasAccum = false;
+
+        auto AccumulatePose = [&](FPoseContext& LayerPose, float LayerWeight)
         {
-            const float PlantWeight = bPreviousWasTraversalPose ? Frame.FootWeight : Frame.FootWeight * CurrentWeight;
-            PlantFoot(Output.Pose, Frame.FootBone, ComponentFootTarget, PlantWeight);
+            if (LayerWeight <= KINDA_SMALL_NUMBER)
+            {
+                return;
+            }
+            if (!bHasAccum)
+            {
+                Output.Pose.CopyBonesFrom(LayerPose.Pose);
+                Output.Curve.CopyFrom(LayerPose.Curve);
+                Output.CustomAttributes.CopyFrom(LayerPose.CustomAttributes);
+                AccumWeight = LayerWeight;
+                bHasAccum = true;
+            }
+            else
+            {
+                FAnimationPoseData OutputData(Output);
+                const FAnimationPoseData LayerData(LayerPose);
+                const float OutputShare = AccumWeight / (AccumWeight + LayerWeight);
+                FAnimationRuntime::BlendTwoPosesTogetherInPlace(OutputData, LayerData, OutputShare);
+                AccumWeight += LayerWeight;
+            }
+        };
+
+        auto ProcessLayer = [&](FClipLayer& Layer, float TraversalProgress)
+        {
+            const float Weight = Layer.GetWeight();
+            if (Weight <= KINDA_SMALL_NUMBER)
+            {
+                return;
+            }
+            if (!Layer.Sequence)
+            {
+                GroundWeight += Weight;
+                return;
+            }
+            FPoseContext LayerPose(Output);
+            if (Layer.Sample(LayerPose, TraversalProgress))
+            {
+                AccumulatePose(LayerPose, Weight);
+                TraversalWeight += Weight;
+            }
+            else
+            {
+                GroundWeight += Weight;
+            }
+        };
+
+        // Evaluate oldest-to-newest outgoing layers, then the active layer.
+        for (FClipLayer& Layer : Outgoing)
+        {
+            ProcessLayer(Layer, 0.0f);
         }
+        ProcessLayer(Current, Frame.Progress);
+
+        // Evaluate the Anim Blueprint base pose at most once per frame when entering or exiting ground locomotion.
+        if (GroundWeight > KINDA_SMALL_NUMBER || !bHasAccum)
+        {
+            FPoseContext GroundPose(Output);
+            EvaluateBasePose(GroundPose, InRootNode);
+            AccumulatePose(GroundPose, GroundWeight > KINDA_SMALL_NUMBER ? GroundWeight : 1.0f);
+        }
+
+        // Apply foot anchoring ONCE to the final blended pose (prevents double-application during multi-layer blends).
+        const float TraversalShare = AccumWeight > KINDA_SMALL_NUMBER
+            ? FMath::Clamp(TraversalWeight / AccumWeight, 0.0f, 1.0f)
+            : 0.0f;
+        ApplyFootOffset(Output.Pose, TraversalShare);
 
         LastTraversalProgress = Frame.Progress;
-        LastTraversalDuration = Frame.Duration;
-        LastOutput.CopyFrom(Output);
         return true;
     }
 
@@ -282,79 +400,118 @@ protected:
         FAnimInstanceProxy::AddReferencedObjects(InAnimInstance, Collector);
         Collector.AddReferencedObject(Current.Sequence);
         Collector.AddReferencedObject(Current.MirrorTable);
-        Collector.AddReferencedObject(Previous.Sequence);
-        Collector.AddReferencedObject(Previous.MirrorTable);
+        for (FClipLayer& Layer : Outgoing)
+        {
+            Collector.AddReferencedObject(Layer.Sequence);
+            Collector.AddReferencedObject(Layer.MirrorTable);
+        }
     }
 
 private:
-    void SetPlayback(UAnimSequence* Sequence, bool bLoop, float Rate, float BlendTime,
-        const FVector2D& Section, UMirrorDataTable* MirrorTable, bool bUseTraversalClock)
+    void EvaluateBasePose(FPoseContext& Target, FAnimNode_Base* InRootNode)
     {
-        const bool bWasBlending = BlendElapsed < BlendDuration;
-        const bool bHadTraversalPose = Current.Sequence != nullptr;
-        BlendDuration = FMath::IsFinite(BlendTime) ? FMath::Max(BlendTime, 0.0f) : 0.0f;
-        BlendElapsed = 0.0f;
-        bPreviousWasTraversalPose = bHadTraversalPose;
-        bBlendFromLiveClip = false;
-
-        if (BlendDuration > 0.0f)
+        if (InRootNode)
         {
-            if (bHadTraversalPose && !bWasBlending)
+            EvaluateAnimationNode_WithRoot(Target, InRootNode);
+        }
+        else
+        {
+            Target.ResetToRefPose();
+        }
+    }
+
+    void SetPlayback(UAnimSequence* Sequence, bool bLoop, float Rate, float BlendTime,
+        const FVector2D& Section, UMirrorDataTable* MirrorTable, bool bUseTraversalClock,
+        EAlphaBlendOption BlendOption, EPlumPoleTimeCurve TimeCurve,
+        float PreviousTraversalProgress, float OutgoingRate)
+    {
+        const float SafeBlendTime = FMath::IsFinite(BlendTime) ? FMath::Max(BlendTime, 0.0f) : 0.0f;
+
+        if (SafeBlendTime > 0.0f)
+        {
+            const float OldWeight = Current.GetWeight();
+            if (OldWeight > KINDA_SMALL_NUMBER)
             {
-                Previous = Current;
-                if (Previous.bUseTraversalClock)
+                FClipLayer Leaving = MoveTemp(Current);
+                if (Leaving.bUseTraversalClock)
                 {
-                    Previous.Time = FMath::Clamp(LastTraversalProgress, 0.0f, 1.0f) * Previous.Length;
-                    Previous.Rate = LastTraversalDuration > KINDA_SMALL_NUMBER
-                        ? Previous.Length / LastTraversalDuration
-                        : 1.0f;
-                    Previous.bUseTraversalClock = false;
+                    // PBZ V6: outgoing Montage instances continue advancing into their clip tail from the exact
+                    // handoff position (1.000 s/s generally, 1.025 s/s for JumpOut blend-out) and hold end pose.
+                    const float HandoffProgress = PreviousTraversalProgress >= 0.0f
+                        ? FMath::Clamp(PreviousTraversalProgress, 0.0f, 1.0f)
+                        : LastTraversalProgress;
+                    Leaving.Time = Leaving.GetSampleTime(HandoffProgress);
+                    Leaving.Rate = FMath::IsFinite(OutgoingRate) && OutgoingRate > 0.0f ? OutgoingRate : 1.0f;
+                    Leaving.bUseTraversalClock = false;
+                    Leaving.bHoldingEndPose = !Leaving.bLoop && Leaving.Time >= Leaving.FullLength;
                 }
-                PreviousMirror.Reset();
-                bBlendFromLiveClip = true;
-            }
-            else
-            {
-                Previous = {};
-                // Match the displayed pose when interrupting an active fade or transitioning from ground locomotion.
-                BlendFrom.CopyFrom(LastOutput);
+                Leaving.Blend.SetBlendOption(BlendOption);
+                Leaving.Blend.SetBlendTime(SafeBlendTime);
+                Leaving.Blend.SetValueRange(OldWeight, 0.0f);
+                Leaving.Blend.Reset();
+
+                if (Outgoing.Num() >= MaxOutgoingLayers)
+                {
+                    int32 LowestIdx = 0;
+                    float LowestWeight = Outgoing[0].GetWeight();
+                    for (int32 i = 1; i < Outgoing.Num(); ++i)
+                    {
+                        const float W = Outgoing[i].GetWeight();
+                        if (W < LowestWeight)
+                        {
+                            LowestWeight = W;
+                            LowestIdx = i;
+                        }
+                    }
+                    Outgoing.RemoveAt(LowestIdx);
+                }
+                Outgoing.Add(MoveTemp(Leaving));
             }
         }
         else
         {
-            Previous = {};
+            Outgoing.Reset();
         }
 
-        if (Current.MirrorTable != MirrorTable)
-        {
-            CurrentMirror.Reset();
-        }
         const float Duration = Sequence ? Sequence->GetPlayLength() : 0.0f;
-        const double Start = FMath::IsFinite(Section.X) ? FMath::Clamp(Section.X, 0.0, 1.0) : 0.0;
-        const double End = FMath::IsFinite(Section.Y) ? FMath::Clamp(Section.Y, Start, 1.0) : 1.0;
+        const double StartFrac = FMath::IsFinite(Section.X) ? FMath::Clamp(Section.X, 0.0, 1.0) : 0.0;
+        const double EndFrac = FMath::IsFinite(Section.Y) ? FMath::Clamp(Section.Y, StartFrac, 1.0) : 1.0;
+
+        Current = FClipLayer();
         Current.Sequence = Sequence;
         Current.MirrorTable = MirrorTable;
-        Current.Start = Duration * static_cast<float>(Start);
-        Current.Length = Duration * static_cast<float>(End - Start);
+        Current.FullLength = Duration;
+        Current.SectionStart = Duration * static_cast<float>(StartFrac);
+        Current.SectionEnd = Duration * static_cast<float>(EndFrac);
         Current.Rate = Rate;
-        Current.Time = Rate < 0.0f ? Current.Length : 0.0f;
+        Current.Time = Rate < 0.0f ? Current.SectionEnd : Current.SectionStart;
+        Current.TimeCurve = TimeCurve;
         Current.bLoop = bLoop;
         Current.bUseTraversalClock = bUseTraversalClock;
+        Current.bHoldingEndPose = false;
+
+        if (SafeBlendTime > 0.0f)
+        {
+            Current.Blend.SetBlendOption(BlendOption);
+            Current.Blend.SetBlendTime(SafeBlendTime);
+            Current.Blend.SetValueRange(0.0f, 1.0f);
+            Current.Blend.Reset();
+        }
+        else
+        {
+            Current.Blend.SetBlendOption(BlendOption);
+            Current.Blend.SetBlendTime(0.0f);
+            Current.Blend.SetValueRange(1.0f, 1.0f);
+            Current.Blend.SetAlpha(1.0f);
+        }
     }
 
-    FClipPlayback Current;
-    FClipPlayback Previous;
-    FCachedPose LastOutput;
-    FCachedPose BlendFrom;
+    FClipLayer Current;
+    TArray<FClipLayer> Outgoing;
     FPlumPoleAnimationFrame Frame;
-    FMirrorCache CurrentMirror;
-    FMirrorCache PreviousMirror;
-    float BlendDuration = 0.0f;
-    float BlendElapsed = 0.0f;
+    FVector CachedFootOffset = FVector::ZeroVector;
+    float FootOffsetDecayRemaining = 0.0f;
     float LastTraversalProgress = 0.0f;
-    float LastTraversalDuration = 0.0f;
-    bool bBlendFromLiveClip = false;
-    bool bPreviousWasTraversalPose = false;
 };
 }
 
@@ -364,10 +521,17 @@ void UPlumPoleAnimInstance::SetClip(UAnimSequence* Sequence, bool bLoop, float R
 }
 
 void UPlumPoleAnimInstance::SetTraversalClip(UAnimSequence* Sequence, bool bLoop, float BlendTime,
-    FVector2D Section, UMirrorDataTable* MirrorTable)
+    FVector2D Section, UMirrorDataTable* MirrorTable, EAlphaBlendOption BlendOption,
+    EPlumPoleTimeCurve TimeCurve, float PreviousTraversalProgress, float OutgoingRate)
 {
     GetProxyOnGameThread<FPlumPoleAnimInstanceProxy>().SetTraversalClip(
-        Sequence, bLoop, BlendTime, Section, MirrorTable);
+        Sequence, bLoop, BlendTime, Section, MirrorTable, BlendOption, TimeCurve,
+        PreviousTraversalProgress, OutgoingRate);
+}
+
+int32 UPlumPoleAnimInstance::GetActiveLayerCount() const
+{
+    return GetProxyOnGameThread<FPlumPoleAnimInstanceProxy>().GetActiveLayerCount();
 }
 
 void UPlumPoleAnimInstance::NativeInitializeAnimation()

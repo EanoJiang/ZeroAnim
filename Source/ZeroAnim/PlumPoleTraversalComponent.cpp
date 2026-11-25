@@ -30,14 +30,131 @@ float GetFlightBump(float Progress)
 {
     return FMath::Square(4.0f * Progress * (1.0f - Progress));
 }
+
+struct FTimeCurveTable
+{
+    TArray<float> Positions;
+    TArray<float> CumulativeTimes;
+
+    FTimeCurveTable(const float* InPos, const float* InRate, int32 Count)
+    {
+        Positions.Reserve(Count);
+        CumulativeTimes.Reserve(Count);
+        float T = 0.0f;
+        for (int32 i = 0; i < Count; ++i)
+        {
+            if (i > 0)
+            {
+                const float AvgInvRate = 0.5f * (1.0f / FMath::Max(InRate[i - 1], 0.05f)
+                    + 1.0f / FMath::Max(InRate[i], 0.05f));
+                T += (InPos[i] - InPos[i - 1]) * AvgInvRate;
+            }
+            Positions.Add(InPos[i]);
+            CumulativeTimes.Add(T);
+        }
+    }
+
+    float EvalTimeAtPos(float Pos) const
+    {
+        if (Pos <= Positions[0])
+        {
+            return CumulativeTimes[0];
+        }
+        const int32 Last = Positions.Num() - 1;
+        if (Pos >= Positions[Last])
+        {
+            return CumulativeTimes[Last] + (Pos - Positions[Last]);
+        }
+        for (int32 i = 0; i < Last; ++i)
+        {
+            if (Pos <= Positions[i + 1])
+            {
+                const float Alpha = (Pos - Positions[i]) / FMath::Max(Positions[i + 1] - Positions[i], KINDA_SMALL_NUMBER);
+                return FMath::Lerp(CumulativeTimes[i], CumulativeTimes[i + 1], Alpha);
+            }
+        }
+        return CumulativeTimes[Last];
+    }
+
+    float EvalPosAtTime(float Time) const
+    {
+        if (Time <= CumulativeTimes[0])
+        {
+            return Positions[0];
+        }
+        const int32 Last = CumulativeTimes.Num() - 1;
+        if (Time >= CumulativeTimes[Last])
+        {
+            return Positions[Last] + (Time - CumulativeTimes[Last]);
+        }
+        for (int32 i = 0; i < Last; ++i)
+        {
+            if (Time <= CumulativeTimes[i + 1])
+            {
+                const float Alpha = (Time - CumulativeTimes[i]) / FMath::Max(CumulativeTimes[i + 1] - CumulativeTimes[i], KINDA_SMALL_NUMBER);
+                return FMath::Lerp(Positions[i], Positions[i + 1], Alpha);
+            }
+        }
+        return Positions[Last];
+    }
+};
+
+const FTimeCurveTable& GetNearHopCurveTable()
+{
+    // PBZ V6 measured dPos/dGameTime shared by Battle_Walk_Fwd_L/R and JumpOut_L_02.
+    static constexpr float Pos[] = {
+        0.00f, 0.20f, 0.25f, 0.30f, 0.35f, 0.40f, 0.45f, 0.50f, 0.53f, 0.56f,
+        0.60f, 0.65f, 0.70f, 0.75f, 0.80f, 0.85f, 0.90f, 0.95f, 1.00f, 1.05f,
+        1.10f, 1.15f, 1.20f, 1.25f, 1.30f, 1.35f, 1.40f, 1.45f, 1.50f, 1.65f, 2.20f
+    };
+    static constexpr float Rate[] = {
+        2.170f, 2.170f, 2.174f, 2.267f, 2.439f, 2.613f, 2.766f, 2.859f, 2.850f, 2.828f,
+        2.732f, 2.648f, 2.520f, 2.389f, 2.233f, 2.121f, 2.006f, 1.917f, 1.806f, 1.710f,
+        1.590f, 1.489f, 1.387f, 1.287f, 1.205f, 1.128f, 1.075f, 1.041f, 1.026f, 1.025f, 1.025f
+    };
+    static const FTimeCurveTable Table(Pos, Rate, UE_ARRAY_COUNT(Pos));
+    return Table;
+}
+
+const FTimeCurveTable& GetForwardFlipCurveTable()
+{
+    // PBZ V6 measured dPos/dGameTime for Dodge_F_R (entry and far flip).
+    static constexpr float Pos[] = {
+        0.00f, 0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f, 0.40f, 0.50f,
+        0.60f, 0.70f, 0.80f, 0.90f, 1.00f, 1.10f, 1.20f, 1.30f, 2.00f
+    };
+    static constexpr float Rate[] = {
+        1.599f, 1.597f, 1.591f, 1.580f, 1.564f, 1.544f, 1.526f, 1.473f, 1.415f,
+        1.346f, 1.285f, 1.217f, 1.156f, 1.105f, 1.062f, 1.036f, 1.025f, 1.025f
+    };
+    static const FTimeCurveTable Table(Pos, Rate, UE_ARRAY_COUNT(Pos));
+    return Table;
+}
+}
+
+float EvaluatePlumPoleTimeCurve(
+    EPlumPoleTimeCurve Curve, float StartSeconds, float EndSeconds, float NormalizedProgress)
+{
+    const float ClampedProgress = FMath::Clamp(NormalizedProgress, 0.0f, 1.0f);
+    if (EndSeconds <= StartSeconds + KINDA_SMALL_NUMBER || Curve == EPlumPoleTimeCurve::Linear)
+    {
+        return FMath::Lerp(StartSeconds, EndSeconds, ClampedProgress);
+    }
+
+    const FTimeCurveTable& Table = Curve == EPlumPoleTimeCurve::ForwardFlip
+        ? GetForwardFlipCurveTable()
+        : GetNearHopCurveTable();
+    const float T0 = Table.EvalTimeAtPos(StartSeconds);
+    const float T1 = Table.EvalTimeAtPos(EndSeconds);
+    return FMath::Clamp(Table.EvalPosAtTime(FMath::Lerp(T0, T1, ClampedProgress)), StartSeconds, EndSeconds);
 }
 
 UPlumPoleTraversalComponent::UPlumPoleTraversalComponent()
-    : EnterTiming(0.11f, 0.76f, 0.89f)
-    , HopTiming(0.343f, 0.56f, 0.58f)
-    , ChainHopTiming(16.0f / 156.0f, 71.0f / 156.0f, 81.0f / 156.0f)
-    , PoleFlipTiming(0.280954f / 1.983333f, 1.090758f / 1.983333f, 1.0f)
-    , DismountTiming(0.10f, 0.52f, 0.76f)
+    : EnterTiming(0.1507f, 0.7965f, 0.8258f)
+    , HopTiming(0.1768f, 0.5601f, 0.5601f)
+    , ChainHopTiming(0.1218f, 0.5306f, 0.5306f)
+    , PoleFlipTiming(0.1507f, 0.7965f, 0.8258f)
+    , DismountTiming(0.1830f, 0.7550f, 1.0f)
     , ShortDismountTiming(0.28f, 0.76f, 0.94f)
 {
     PrimaryComponentTick.bCanEverTick = true;
@@ -58,6 +175,7 @@ void UPlumPoleTraversalComponent::BeginPlay()
     if (CharacterMovement)
     {
         AddTickPrerequisiteComponent(CharacterMovement);
+        PreparePoleFlip();
     }
     else
     {
@@ -90,12 +208,20 @@ void UPlumPoleTraversalComponent::TickComponent(float DeltaTime, ELevelTick Tick
         return;
     }
 
-    RememberMovementInput();
-
     if (bMovementLocked && CharacterMovement->MovementMode != MOVE_None)
     {
         CharacterMovement->DisableMovement();
     }
+
+    // CharacterMovement ticks before us (prerequisite) and consumes ControlInputVector into LastControlInputVector
+    // each tick even in MOVE_None; reading pending-or-last gives exact live input without wiping it.
+    CurrentFrameMoveInput = Character->GetPendingMovementInputVector();
+    if (CurrentFrameMoveInput.IsNearlyZero())
+    {
+        CurrentFrameMoveInput = Character->GetLastMovementInputVector();
+    }
+
+    RememberMovementInput();
 
     if (bArcActive)
     {
@@ -105,6 +231,7 @@ void UPlumPoleTraversalComponent::TickComponent(float DeltaTime, ELevelTick Tick
 
     if (TraversalState == EPlumPoleTraversalState::Perched)
     {
+        PerchElapsed += DeltaTime;
         const bool bCanAutoChain = bJustLandedFromHop;
         bJustLandedFromHop = false;
         const APlumPoleActor* Pole = CurrentPole.Get();
@@ -120,9 +247,17 @@ void UPlumPoleTraversalComponent::TickComponent(float DeltaTime, ELevelTick Tick
         else if (bAutoHopWithMovementInput)
         {
             const FVector Direction = GetAutoHopDirection();
-            if (!Direction.IsNearlyZero())
+            if (Direction.IsNearlyZero())
             {
-                TryStartFromPerch(Direction, bCanAutoChain ? EArcStyle::ChainHop : EArcStyle::Normal, false);
+                bInputNeutralSincePerch = true;
+            }
+            else
+            {
+                const bool bSteeredAwayFromArrival = ArrivalDirection.IsNearlyZero()
+                    || FVector::DotProduct(Direction, ArrivalDirection) < 0.5f;
+                const bool bCanAutoDismount = bAutoDismountWithMovementInput
+                    && (bInputNeutralSincePerch || bSteeredAwayFromArrival || PerchElapsed >= AutoDismountHoldDelay);
+                TryStartFromPerch(Direction, bCanAutoChain ? EArcStyle::ChainHop : EArcStyle::Normal, bCanAutoDismount);
             }
         }
     }
@@ -179,13 +314,12 @@ bool UPlumPoleTraversalComponent::ApplyPoleInput(bool bFlipRequested)
             return false;
         }
         BufferedDirection = GetTravelDirection();
-        const bool bUseChainHop = TraversalState == EPlumPoleTraversalState::Hopping && GetTraversalProgress() < 0.75f;
+        const bool bUseChainHop = TraversalState == EPlumPoleTraversalState::Entering
+            || (TraversalState == EPlumPoleTraversalState::Hopping && GetTraversalProgress() < 0.75f);
         BufferedStyle = bFlipRequested ? EArcStyle::PoleFlip :
             bUseChainHop ? EArcStyle::ChainHop : EArcStyle::Normal;
-        // A second press during a hop stays queued until the landing can support another jump.
-        const float TimeUntilChain = TraversalState == EPlumPoleTraversalState::Hopping
-            ? TraversalDuration * ActiveTiming.ChainProgress - TraversalElapsed
-            : 0.0f;
+        // A second press during entry or a hop stays queued until the landing can support another jump.
+        const float TimeUntilChain = TraversalDuration * ActiveTiming.ChainProgress - TraversalElapsed;
         BufferedJumpExpires = GetWorld()->GetTimeSeconds() + FMath::Max(TimeUntilChain, 0.0f) + JumpBufferSeconds;
         return true;
     }
@@ -211,6 +345,7 @@ bool UPlumPoleTraversalComponent::TryStartFromGround(const FVector& Direction)
         return false;
     }
 
+    PreparePoleFlip();
     FVector CarryVelocity;
     EArcStyle Style = EArcStyle::Normal;
     APlumPoleActor* Pole = FindPole(Direction, true, CarryVelocity, EArcStyle::Normal, false, Style);
@@ -263,7 +398,10 @@ bool UPlumPoleTraversalComponent::PreparePoleFlip()
 
 FVector2D UPlumPoleTraversalComponent::SamplePoleFlipTravel(float Progress) const
 {
-    const FAnimExtractContext Context(static_cast<double>(Progress * ActiveFlipAnimation->GetPlayLength()));
+    const float FlipEnd = FMath::Min(PoleFlipSectionEndSeconds, ActiveFlipAnimation->GetPlayLength());
+    const float SampleSeconds = EvaluatePlumPoleTimeCurve(
+        EPlumPoleTimeCurve::ForwardFlip, 0.0f, FlipEnd, Progress);
+    const FAnimExtractContext Context(static_cast<double>(SampleSeconds));
     return FVector2D(ActiveFlipAnimation->EvaluateCurveData(FlipForwardCurve, Context),
         ActiveFlipAnimation->EvaluateCurveData(FlipUpCurve, Context));
 }
@@ -289,6 +427,18 @@ APlumPoleActor* UPlumPoleTraversalComponent::GetTargetPole() const
     return TargetPole.Get();
 }
 
+APlumPoleActor* UPlumPoleTraversalComponent::FindEnterablePole() const
+{
+    if (TraversalState != EPlumPoleTraversalState::Grounded || !IsValid(Character) || !IsValid(CharacterMovement)
+        || !CharacterMovement->IsMovingOnGround())
+    {
+        return nullptr;
+    }
+    FVector CarryVelocity;
+    EArcStyle Style = EArcStyle::Normal;
+    return FindPole(GetTravelDirection(), true, CarryVelocity, EArcStyle::Normal, false, Style);
+}
+
 float UPlumPoleTraversalComponent::GetTraversalProgress() const
 {
     return TraversalDuration > 0.0f ? FMath::Clamp(TraversalElapsed / TraversalDuration, 0.0f, 1.0f) : 0.0f;
@@ -296,7 +446,11 @@ float UPlumPoleTraversalComponent::GetTraversalProgress() const
 
 void UPlumPoleTraversalComponent::RememberMovementInput()
 {
-    const FVector Direction = Character->GetLastMovementInputVector().GetSafeNormal2D();
+    FVector Direction = CurrentFrameMoveInput.GetSafeNormal2D();
+    if (Direction.IsNearlyZero())
+    {
+        Direction = Character->GetLastMovementInputVector().GetSafeNormal2D();
+    }
     if (!Direction.IsNearlyZero())
     {
         LastMoveDirection = Direction;
@@ -312,7 +466,9 @@ FVector UPlumPoleTraversalComponent::GetTravelDirection() const
         return ExplicitDirection;
     }
 
-    const FVector PendingDirection = Character->GetPendingMovementInputVector().GetSafeNormal2D();
+    const FVector PendingDirection = CurrentFrameMoveInput.IsNearlyZero()
+        ? Character->GetPendingMovementInputVector().GetSafeNormal2D()
+        : CurrentFrameMoveInput.GetSafeNormal2D();
     if (!PendingDirection.IsNearlyZero())
     {
         return PendingDirection;
@@ -327,15 +483,19 @@ FVector UPlumPoleTraversalComponent::GetTravelDirection() const
 
 FVector UPlumPoleTraversalComponent::GetAutoHopDirection() const
 {
-    // Only use real movement from this update. Camera facing and buffered input cannot sustain a chain.
+    // Only use live movement from this update. Camera facing and stale input cannot sustain a chain.
     if (ExplicitInputFrame == GFrameCounter && !ExplicitDirection.IsNearlyZero())
     {
         return ExplicitInputMagnitude >= AutoHopInputThreshold ? ExplicitDirection : FVector::ZeroVector;
     }
-    FVector Movement = Character->GetPendingMovementInputVector();
-    if (Movement.IsNearlyZero())
+    FVector Movement = CurrentFrameMoveInput;
+    if (Movement.IsNearlyZero() && !bMovementLocked)
     {
-        Movement = Character->GetLastMovementInputVector();
+        Movement = Character->GetPendingMovementInputVector();
+        if (Movement.IsNearlyZero())
+        {
+            Movement = Character->GetLastMovementInputVector();
+        }
     }
     return Movement.SizeSquared2D() >= FMath::Square(AutoHopInputThreshold) ? Movement.GetSafeNormal2D() : FVector::ZeroVector;
 }
@@ -482,7 +642,7 @@ FPlumPoleTraversalTiming UPlumPoleTraversalComponent::GetTiming(EPlumPoleTravers
 float UPlumPoleTraversalComponent::GetDuration(EPlumPoleTraversalState ArcState, EArcStyle Style) const
 {
     const float Duration = ArcState == EPlumPoleTraversalState::Entering ? EnterDuration :
-        Style == EArcStyle::PoleFlip ? ActiveFlipAnimation->GetPlayLength() / FMath::Max(PoleFlipPlayRate, 0.1f) :
+        Style == EArcStyle::PoleFlip ? PoleFlipDuration / FMath::Max(PoleFlipPlayRate, 0.1f) :
         Style == EArcStyle::ChainHop ? ChainHopDuration :
         ArcState == EPlumPoleTraversalState::Hopping ? HopDuration :
         Style == EArcStyle::ShortDismount ? ShortDismountDuration : DismountDuration;
@@ -501,12 +661,33 @@ FVector UPlumPoleTraversalComponent::GetArcLocation(const FVector& Start, const 
     {
     case EPlumPoleTraversalState::Entering:
     {
-        // Close to the side of a post, rise first. Give a running approach room to carry across the floor.
+        // PBZ V6 ground entry uses Dodge_F_R: stay grounded during takeoff wind-up, then soar cleanly onto the crown.
+        if (ActiveFlipAnimation && !FMath::IsNearlyEqual(FlipContactTravel.X, FlipReleaseTravel.X))
+        {
+            if (Progress <= Timing.TakeoffProgress)
+            {
+                return Start;
+            }
+            if (Progress >= Timing.ContactProgress)
+            {
+                return End;
+            }
+            const FVector2D Sample = SamplePoleFlipTravel(Progress);
+            const double RawAlong = FMath::Clamp(
+                (Sample.X - FlipReleaseTravel.X) / (FlipContactTravel.X - FlipReleaseTravel.X), 0.0, 1.0);
+            const double Along = FMath::Lerp(RawAlong, static_cast<double>(FMath::SmoothStep(0.06f, 1.0f, Flight)), 0.15);
+            // Match PBZ V6 ID 13 Dodge_F_R ground-entry soar height (~235-240 cm pelvis above destination crown).
+            const double FlipLift = FMath::Max(
+                0.0, Sample.Y - FMath::Lerp(FlipReleaseTravel.Y, FlipContactTravel.Y, static_cast<double>(Flight)));
+            FVector Position = FMath::Lerp(Start, End, Along);
+            Position.Z = FMath::Lerp(Start.Z, End.Z, FMath::SmoothStep(0.0f, 0.78f, Flight)) + FlipLift;
+            return Position;
+        }
+        // Fallback when no flip travel curve is configured.
         const float Lead = FMath::Lerp(0.49f, 0.10f, FMath::SmoothStep(66.0f, 175.0f, Distance));
         const float ToContact = FMath::Min(Progress / Timing.ContactProgress, 1.0f);
         const float VelocityWeight = Duration * Progress * FMath::Cube(1.0f - ToContact);
         FVector Position = FMath::Lerp(Start, End, FMath::SmoothStep(Lead, 1.0f, Flight)) + CarryVelocity * VelocityWeight;
-        // Clear the leading toe over the rim before the landing pose plants it on the crown.
         const float Overshoot = FMath::Clamp(FMath::Abs(Elevation) * 0.23f + Distance * 0.03f, 16.0f, 43.0f);
         const float Crest = FMath::SmoothStep(0.17f, 0.61f, Flight) * (1.0f - FMath::SmoothStep(0.63f, 1.0f, Flight));
         Position.Z = FMath::Lerp(Start.Z, End.Z, FMath::SmoothStep(0.0f, 0.67f, Flight)) + Overshoot * Crest;
@@ -530,25 +711,28 @@ FVector UPlumPoleTraversalComponent::GetArcLocation(const FVector& Start, const 
             const double Height = Sample.Y - FMath::Lerp(FlipReleaseTravel.Y, FlipContactTravel.Y, static_cast<double>(Flight));
             return FMath::Lerp(Start, End, Along) + FVector::UpVector * Height;
         }
-        // The source pose already tucks the feet in flight. Reserve a larger lift for uneven posts.
-        const float Height = HopHeight + FMath::Abs(Elevation) * 0.30f;
-        const float VerticalTravel = Elevation >= 0.0f ? FMath::SmoothStep(0.0f, 0.82f, Flight) : FMath::SmoothStep(0.20f, 1.0f, Flight);
-        // The ordinary clip drives the pelvis forward while the departure foot is still planted.
-        const float WeightShiftStart = FMath::Max(0.0f, Timing.TakeoffProgress - (Timing.ContactProgress - Timing.TakeoffProgress) / 3.0f);
-        const float HorizontalTravel = Style == EArcStyle::Normal
-            ? FMath::SmoothStep(WeightShiftStart, Timing.ContactProgress, Progress)
-            : Travel;
-        FVector Position = FMath::Lerp(Start, End, HorizontalTravel);
+        // PBZ V6 Battle_Walk_Fwd SkewWarp: slightly front-loaded XY matching the 2.8x->1.3x play rate,
+        // and minimal capsule Z bump (+1.5 to +4 cm) since the pose itself already tucks the legs ~30 cm.
+        const float NearHopTravel = FMath::SmoothStep(
+            0.0f, 1.0f, FMath::Clamp(Flight + 0.12f * Flight * (1.0f - Flight), 0.0f, 1.0f));
+        const float Height = HopHeight + FMath::Abs(Elevation) * 0.04f;
+        const float VerticalTravel = Elevation >= 0.0f
+            ? FMath::SmoothStep(0.0f, 0.94f, Flight)
+            : FMath::SmoothStep(0.04f, 1.0f, Flight);
+        FVector Position = FMath::Lerp(Start, End, NearHopTravel);
         Position.Z = FMath::Lerp(Start.Z, End.Z, VerticalTravel) + Height * GetFlightBump(Flight);
         return Position;
     }
     default:
     {
         const bool bShortExit = Style == EArcStyle::ShortDismount;
-        // Carry horizontal speed through contact so the recovery can roll into ground movement.
-        const float ExitTravel = Travel - DismountExitSlope * FMath::Square(Flight) * (1.0f - Flight);
-        const float Height = (bShortExit ? 15.0f : 29.0f) + FMath::Abs(Elevation) * 0.13f;
-        const float DescentStart = bShortExit ? 0.22f : 0.45f;
+        // PBZ V6 JumpOut_L_02: low forward leap without upward backflip ballooning (+4 cm vs legacy +51 cm),
+        // clearing the 34 cm pole cylinder + 34 cm capsule radius horizontally before descending smoothly to the floor.
+        const float ForwardTravel = FMath::SmoothStep(
+            0.0f, 1.0f, FMath::Clamp(Flight + 0.22f * Flight * (1.0f - Flight), 0.0f, 1.0f));
+        const float ExitTravel = ForwardTravel - DismountExitSlope * FMath::Square(Flight) * (1.0f - Flight);
+        const float Height = bShortExit ? 8.0f : 4.0f;
+        const float DescentStart = bShortExit ? 0.20f : 0.36f;
         FVector Position = FMath::Lerp(Start, End, ExitTravel);
         Position.Z = FMath::Lerp(Start.Z, End.Z, FMath::SmoothStep(DescentStart, 1.0f, Flight)) + Height * GetFlightBump(Flight);
         return Position;
@@ -601,6 +785,7 @@ bool UPlumPoleTraversalComponent::StartArc(EPlumPoleTraversalState ArcState, con
     const FVector Facing = ArcState == EPlumPoleTraversalState::Dismounting && Style != EArcStyle::ShortDismount && bFaceAwayFromDismount ? -Delta : Delta;
     ArcStartYaw = static_cast<float>(Character->GetActorRotation().Yaw);
     ArcYawDelta = FMath::FindDeltaAngleDegrees(ArcStartYaw, static_cast<float>(Facing.Rotation().Yaw));
+    PreviousTraversalProgress = GetTraversalProgress();
     ActiveTiming = GetTiming(ArcState, Style);
     TraversalDuration = GetDuration(ArcState, Style);
     TraversalElapsed = 0.0f;
@@ -642,12 +827,23 @@ void UPlumPoleTraversalComponent::AdvanceArc(float DeltaTime)
     const float AnimationProgress = EndTime / TraversalDuration;
     if (bMovementLocked)
     {
-        const float TurnFraction = FMath::GetMappedRangeValueClamped(FVector2D(55.0f, 140.0f),
-            FVector2D(0.32f, 0.70f), FMath::Abs(ArcYawDelta));
-        // Set the flip's heading while the support foot is planted so the roll follows the flight path.
-        const float TurnEnd = ArcStyle == EArcStyle::PoleFlip ? ActiveTiming.TakeoffProgress :
-            FMath::Lerp(ActiveTiming.TakeoffProgress, ActiveTiming.ContactProgress, TurnFraction);
-        const float Yaw = ArcStartYaw + ArcYawDelta * FMath::SmoothStep(0.0f, TurnEnd, AnimationProgress);
+        float YawAlpha = 0.0f;
+        if (ArcStyle == EArcStyle::PoleFlip || TraversalState == EPlumPoleTraversalState::Entering)
+        {
+            // PBZ V6 Dodge_F_R SkewWarp [0.243, 1.093]: zero pre-takeoff spin, smooth ease-out airborne turn.
+            const float TurnEnd = FMath::Max(ActiveTiming.TakeoffProgress + 0.05f, ActiveTiming.ContactProgress * 0.92f);
+            const float U = FMath::Clamp(
+                (AnimationProgress - ActiveTiming.TakeoffProgress) / (TurnEnd - ActiveTiming.TakeoffProgress), 0.0f, 1.0f);
+            YawAlpha = 1.0f - FMath::Square(1.0f - U);
+        }
+        else
+        {
+            // PBZ V6 Battle_Walk_Fwd & JumpOut two-window SkewWarp: ~42% during wind-up, remaining ~58% across flight.
+            const float TurnEnd = FMath::Max(ActiveTiming.TakeoffProgress, ActiveTiming.ContactProgress * 0.95f);
+            const float U = FMath::Clamp(AnimationProgress / TurnEnd, 0.0f, 1.0f);
+            YawAlpha = FMath::Lerp(FMath::SmoothStep(0.0f, 1.0f, U), 1.0f - FMath::Square(1.0f - U), 0.55f);
+        }
+        const float Yaw = ArcStartYaw + ArcYawDelta * YawAlpha;
         Character->SetActorRotation(FRotator(0.0f, Yaw, 0.0f));
 
         const float EndProgress = FMath::Min(AnimationProgress, ActiveTiming.ContactProgress);
@@ -681,21 +877,34 @@ void UPlumPoleTraversalComponent::AdvanceArc(float DeltaTime)
     {
         const bool bHasBufferedJump = GetWorld()->GetTimeSeconds() <= BufferedJumpExpires;
         const bool bReachedEnd = TraversalElapsed >= TraversalDuration;
-        if (bHasBufferedJump && AnimationProgress >= ActiveTiming.ChainProgress)
+        if (AnimationProgress >= ActiveTiming.ChainProgress)
         {
             const float ChainTime = TraversalDuration * ActiveTiming.ChainProgress;
             const float OverflowDelta = PreviousElapsed < ChainTime
                 ? FMath::Max(0.0f, EndTime - ChainTime)
                 : DeltaTime;
-            if (TryChainFromPoleArc(OverflowDelta))
+
+            if (bHasBufferedJump)
             {
-                return;
+                if (TryChainFromPoleArc(OverflowDelta, BufferedDirection, BufferedStyle, BufferedStyle != EArcStyle::PoleFlip))
+                {
+                    return;
+                }
+                // No next target is reachable from this pole; clear the buffer and finish settling onto the current pole.
+                BufferedJumpExpires = -1.0;
+                if (!bReachedEnd)
+                {
+                    return;
+                }
             }
-            // No next target is reachable from this pole; clear the buffer and finish settling onto the current pole.
-            BufferedJumpExpires = -1.0;
-            if (!bReachedEnd)
+            else if (bAutoHopWithMovementInput)
             {
-                return;
+                const FVector AutoDirection = GetAutoHopDirection();
+                if (!AutoDirection.IsNearlyZero()
+                    && TryChainFromPoleArc(OverflowDelta, AutoDirection, EArcStyle::ChainHop, false))
+                {
+                    return;
+                }
             }
         }
         if (bReachedEnd)
@@ -718,13 +927,15 @@ void UPlumPoleTraversalComponent::AdvanceArc(float DeltaTime)
         ReturnToCharacterMovement(Velocity, bLanded);
     }
 
-    if (AnimationProgress >= ActiveTiming.ChainProgress && !bMovementLocked && !CharacterMovement->IsFalling())
+    const bool bEarlyGroundBlend = AnimationProgress >= 0.96f && !GetAutoHopDirection().IsNearlyZero();
+    if ((AnimationProgress >= ActiveTiming.ChainProgress || bEarlyGroundBlend) && !bMovementLocked && !CharacterMovement->IsFalling())
     {
         FinishDismount();
     }
 }
 
-bool UPlumPoleTraversalComponent::TryChainFromPoleArc(float OverflowDelta)
+bool UPlumPoleTraversalComponent::TryChainFromPoleArc(
+    float OverflowDelta, const FVector& ChainDirection, EArcStyle ChainStyle, bool bAllowDismount)
 {
     APlumPoleActor* LandedPole = TargetPole.Get();
     if (!IsReservedAnchor(LandedPole, Character->GetActorLocation()))
@@ -737,11 +948,10 @@ bool UPlumPoleTraversalComponent::TryChainFromPoleArc(float OverflowDelta)
     CurrentPole = LandedPole;
     TargetPole.Reset();
 
-    const bool bAllowDismount = BufferedStyle != EArcStyle::PoleFlip;
     const bool bCanFlip = PreparePoleFlip();
     FVector CarryVelocity = FVector::ZeroVector;
-    EArcStyle NextStyle = BufferedStyle;
-    APlumPoleActor* NextPole = FindPole(BufferedDirection, false, CarryVelocity, BufferedStyle, bCanFlip, NextStyle);
+    EArcStyle NextStyle = ChainStyle;
+    APlumPoleActor* NextPole = FindPole(ChainDirection, false, CarryVelocity, ChainStyle, bCanFlip, NextStyle);
 
     bool bStarted = false;
     if (NextPole)
@@ -753,7 +963,7 @@ bool UPlumPoleTraversalComponent::TryChainFromPoleArc(float OverflowDelta)
     {
         FVector Landing;
         bool bShortExit = false;
-        if (FindDismountLocation(BufferedDirection, Landing, bShortExit))
+        if (FindDismountLocation(ChainDirection, Landing, bShortExit))
         {
             bStarted = StartArc(EPlumPoleTraversalState::Dismounting, Landing, nullptr, FVector::ZeroVector,
                 bShortExit ? EArcStyle::ShortDismount : EArcStyle::Normal, true);
@@ -783,6 +993,10 @@ void UPlumPoleTraversalComponent::CompletePoleArc()
         return;
     }
 
+    PreviousTraversalProgress = GetTraversalProgress();
+    ArrivalDirection = (ArcEnd - ArcStart).GetSafeNormal2D();
+    PerchElapsed = 0.0f;
+    bInputNeutralSincePerch = false;
     bArcActive = false;
     bLastTraversalCompleted = true;
     bJustLandedFromHop = TraversalState == EPlumPoleTraversalState::Hopping;
@@ -793,6 +1007,7 @@ void UPlumPoleTraversalComponent::CompletePoleArc()
 
 void UPlumPoleTraversalComponent::FinishDismount()
 {
+    PreviousTraversalProgress = GetTraversalProgress();
     bArcActive = false;
     TraversalElapsed = 0.0f;
     TraversalDuration = 0.0f;
@@ -801,6 +1016,7 @@ void UPlumPoleTraversalComponent::FinishDismount()
 
 void UPlumPoleTraversalComponent::InterruptArc()
 {
+    PreviousTraversalProgress = GetTraversalProgress();
     bArcActive = false;
     bLastTraversalCompleted = false;
     BufferedJumpExpires = -1.0;
@@ -818,6 +1034,9 @@ void UPlumPoleTraversalComponent::InterruptArc()
         Character->SetActorLocationAndRotation(ArcStart, FRotator(0.0f, ArcStartYaw, 0.0f), true, &Hit);
         if (!Hit.bBlockingHit)
         {
+            PerchElapsed = 0.0f;
+            bInputNeutralSincePerch = false;
+            ArrivalDirection = FVector::ZeroVector;
             ChangeState(EPlumPoleTraversalState::Perched, DeparturePole);
             return;
         }

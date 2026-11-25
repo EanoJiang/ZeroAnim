@@ -21,6 +21,12 @@ public:
     FVector GetLandingLocation() const;
 
     UFUNCTION(BlueprintPure, Category = "Plum Pole")
+    float GetRadius() const { return Radius; }
+
+    UFUNCTION(BlueprintPure, Category = "Plum Pole")
+    float GetHeight() const { return Height; }
+
+    UFUNCTION(BlueprintPure, Category = "Plum Pole")
     float GetApproachRadius() const { return ApproachRadius; }
 
     /** A character reserves the destination during its approach and holds it while perched. */
@@ -53,7 +59,7 @@ private:
     float Radius = 34.0f;
 
     UPROPERTY(EditAnywhere, Category = "Plum Pole", meta = (ClampMin = "0"))
-    float ApproachRadius = 340.0f;
+    float ApproachRadius = 360.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Plum Pole", meta = (AllowPrivateAccess = "true"))
     bool bTraversalEnabled = true;
