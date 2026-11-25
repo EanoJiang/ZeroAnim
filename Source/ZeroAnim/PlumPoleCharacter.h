@@ -3,6 +3,7 @@
 #include "AlphaBlend.h"
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "PlumPoleInteractPromptWidget.h"
 #include "PlumPoleTraversalComponent.h"
 #include "PlumPoleCharacter.generated.h"
 
@@ -16,6 +17,7 @@ class UPlumPoleInteractPromptWidget;
 class USpringArmComponent;
 class UWidgetComponent;
 class FPlumPoleInputDeviceProcessor;
+struct FInputActionValue;
 struct FPlumPoleAnimationFrame;
 
 UENUM(BlueprintType)
@@ -70,6 +72,12 @@ public:
     virtual void Tick(float DeltaSeconds) override;
     FPlumPoleAnimationFrame GetTraversalAnimationFrame() const;
 
+    UFUNCTION(BlueprintPure, Category = "Plum Pole")
+    bool IsPoleAbilityActive() const;
+
+    UFUNCTION(BlueprintPure, Category = "Plum Pole|Animation")
+    UAnimSequence* GetSequenceForTimeline(EPlumPoleTimeline Timeline) const;
+
     UFUNCTION(BlueprintPure, Category = "Plum Pole|UI")
     bool IsUsingGamepad() const { return bUsingGamepad; }
 
@@ -82,15 +90,31 @@ public:
     UFUNCTION(BlueprintPure, Category = "Plum Pole|UI")
     APlumPoleActor* GetInteractPromptPole() const { return PromptTargetPole.Get(); }
 
-    /** Translate a jump or flip press into a traversal request. Movement validates the requested transition. */
+    UFUNCTION(BlueprintPure, Category = "Plum Pole|UI")
+    EPlumPoleInteractUIState GetInteractPromptUIState() const { return CurrentPromptUIState; }
+
+    UFUNCTION(BlueprintPure, Category = "Plum Pole|UI")
+    UPlumPoleInteractPromptWidget* GetInteractPromptWidget() const;
+
+    UFUNCTION(BlueprintCallable, Category = "Plum Pole|UI")
+    void SetInteractPromptInCombat(bool bInCombat);
+
+    UFUNCTION(BlueprintCallable, Category = "Plum Pole|UI")
+    void SetInteractPromptGamepadStyle(EPlumPoleGamepadIconStyle InStyle);
+
+    /** Select playback for an exact PBZ timeline (Dash, Jump_L/R, Idle_L/R, JumpToPlatform_L/R, JumpOff). */
+    UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "Plum Pole|Animation")
+    FPlumPolePlayback ChooseTimelinePlayback(EPlumPoleTimeline Timeline, float StartTimeSeconds) const;
+
+    /** Legacy input response hook kept for Blueprint compatibility. */
     UFUNCTION(BlueprintNativeEvent, BlueprintPure, Category = "Plum Pole|Input")
     EPlumPoleInputResponse SelectPoleInputResponse(EPlumPoleTraversalState State, bool bFlipRequested, bool bCanChainFromGround) const;
 
-    /** Rank a reachable pole. A lower score gives that pole priority. HeightDelta is signed in cm. */
+    /** Legacy candidate scorer hook kept for Blueprint compatibility (unused by PBZ 1:1 selector). */
     UFUNCTION(BlueprintNativeEvent, BlueprintPure, Category = "Plum Pole|Targeting")
     float ScorePoleCandidate(float DirectionAlignment, float HorizontalDistance, float HeightDelta, float SearchRadius) const;
 
-    /** Called on the game thread for every state change, after updating the support foot. */
+    /** Legacy state-based animation selector kept for Blueprint compatibility. */
     UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "Plum Pole|Animation")
     FPlumPolePlayback SelectPoleAnimation(EPlumPoleTraversalState State, EPlumPoleTraversalState PreviousState,
         bool bRightSupport, bool bPoleFlip, bool bShortExit, bool bChainedHop) const;
@@ -108,19 +132,29 @@ private:
     UPROPERTY(EditDefaultsOnly, Category = "Plum Pole|Input")
     TObjectPtr<UInputAction> PoleFlipInputAction;
 
+    /** Axis2D movement action (default /Game/Input/Actions/IA_Move) routed to PBZ OnMove2D. */
+    UPROPERTY(EditDefaultsOnly, Category = "Plum Pole|Input")
+    TObjectPtr<UInputAction> PoleMoveInputAction;
+
     TWeakObjectPtr<UEnhancedInputLocalPlayerSubsystem> PoleInputOwner;
     TSharedPtr<FPlumPoleInputDeviceProcessor> InputDeviceProcessor;
     void RegisterInputDeviceDetector();
     void UnregisterInputDeviceDetector();
     void RemovePoleInputContext();
     void HandlePoleFlipInput();
+    void HandlePoleMoveInput(const FInputActionValue& Value);
     void ResolveActiveCameraComponents();
+    void ReconcileCameraSpringArmOwner(USpringArmComponent* ActiveArm);
+    void RestoreAppliedCameraAdditive();
     void UpdatePlumPoleCamera(float DeltaSeconds);
     void UpdateInteractPrompt(float DeltaSeconds);
 
     UFUNCTION()
-    void OnTraversalChanged(
-        EPlumPoleTraversalState PreviousState, EPlumPoleTraversalState NewState, APlumPoleActor* Pole);
+    void OnTimelineChanged(EPlumPoleTimeline PreviousTimeline, EPlumPoleTimeline NewTimeline,
+        float StartTimeSeconds, float PreviousAnimTimeSeconds, float OutgoingRate, bool bNaturalAutoBlendOut);
+
+    UFUNCTION()
+    void OnCameraAdditiveChanged(bool bEnablePoleCamera);
 
     UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadOnly, Category = "Plum Pole|Animation",
         meta = (AllowPrivateAccess = "true"))
@@ -138,50 +172,109 @@ private:
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|UI", meta = (AllowPrivateAccess = "true"))
     bool bShowInteractPrompt = true;
 
+    /** Vertical offset (cm) above pole StandPoint (crown) for Screen-space PBZ prompt placement. */
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|UI", meta = (AllowPrivateAccess = "true"))
+    float PolePromptCrownOffsetZ = 18.0f;
+
+    /** Outer PBZ awareness radius (cm) showing the hollow white Virtual ring before entering 500 cm InputAction range. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|UI", meta = (AllowPrivateAccess = "true", ClampMin = "0"))
+    float InteractPromptVirtualRadius = 900.0f;
+
+    /** Full horizontal view cone (deg) around camera forward for outer Virtual awareness (0 = 360 deg). */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|UI", meta = (AllowPrivateAccess = "true", ClampMin = "0", ClampMax = "360"))
+    float InteractPromptVirtualViewAngle = 150.0f;
+
+    /** Drive VirtualScreen / InputActionScreen directional arrow when tracked pole projects outside viewport safe margin. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|UI", meta = (AllowPrivateAccess = "true"))
+    bool bEnableOffscreenPromptArrow = true;
+
+    /** Safe pixel margin from viewport edges before clamping to *Screen directional arrow state. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|UI", meta = (AllowPrivateAccess = "true", ClampMin = "0"))
+    float InteractPromptScreenMargin = 56.0f;
+
+    // Legacy World-space prompt properties retained for BP_SoulThirdPerson serialization compatibility
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Legacy UI", meta = (AllowPrivateAccess = "true"))
     float InteractPromptHeightBelowCrown = 34.0f;
 
-    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|UI", meta = (AllowPrivateAccess = "true", ClampMin = "0.05"))
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Legacy UI", meta = (AllowPrivateAccess = "true", ClampMin = "0.05"))
     float InteractPromptBaseScale = 0.21f;
 
-    /** Smoothly blend the third-person camera between PBZ grounded over-the-shoulder view and elevated pole view. */
-    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Camera", meta = (AllowPrivateAccess = "true"))
+    // --- PBZ Exact Additive Camera Parameters (GA_StandingOnPole NBCamera) ---
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|PBZ Camera", meta = (AllowPrivateAccess = "true"))
     bool bUsePlumPoleCameraBlend = true;
 
-    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Camera", meta = (AllowPrivateAccess = "true", ClampMin = "100"))
+    /** PBZ StandingOnPoleDistance additive arm length (+300.0 cm). */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|PBZ Camera", meta = (AllowPrivateAccess = "true"))
+    float PoleAdditiveArmLength = 300.0f;
+
+    /** PBZ StandingOnPoleSocketOffset additive socket offset (0, +100, 0). */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|PBZ Camera", meta = (AllowPrivateAccess = "true"))
+    FVector PoleAdditiveSocketOffset = FVector(0.0, 100.0, 0.0);
+
+    /** PBZ finite camera additive blend duration (0.5 s). */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|PBZ Camera", meta = (AllowPrivateAccess = "true", ClampMin = "0.01"))
+    float PoleCameraBlendDuration = 0.5f;
+
+    // --- Legacy camera properties retained for BP_SoulThirdPerson serialization compatibility (not applied on poles) ---
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Legacy Camera", meta = (AllowPrivateAccess = "true", ClampMin = "100"))
     float GroundCameraArmLength = 340.0f;
 
-    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Camera", meta = (AllowPrivateAccess = "true"))
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Legacy Camera", meta = (AllowPrivateAccess = "true"))
     FVector GroundCameraSocketOffset = FVector(0.0, 38.0, 44.0);
 
-    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Camera", meta = (AllowPrivateAccess = "true"))
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Legacy Camera", meta = (AllowPrivateAccess = "true"))
     FVector GroundCameraTargetOffset = FVector(0.0, 0.0, 24.0);
 
-    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Camera", meta = (AllowPrivateAccess = "true", ClampMin = "40", ClampMax = "110"))
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Legacy Camera", meta = (AllowPrivateAccess = "true", ClampMin = "40", ClampMax = "110"))
     float GroundCameraFOV = 68.0f;
 
-    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Camera", meta = (AllowPrivateAccess = "true", ClampMin = "150"))
-    float PoleCameraArmLength = 540.0f;
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Legacy Camera", meta = (AllowPrivateAccess = "true", ClampMin = "150"))
+    float PoleCameraArmLength = 640.0f;
 
-    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Camera", meta = (AllowPrivateAccess = "true"))
-    FVector PoleCameraSocketOffset = FVector(0.0, 0.0, 0.0);
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Legacy Camera", meta = (AllowPrivateAccess = "true"))
+    FVector PoleCameraSocketOffset = FVector(0.0, 138.0, 44.0);
 
-    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Camera", meta = (AllowPrivateAccess = "true"))
-    FVector PoleCameraTargetOffset = FVector(0.0, 0.0, -10.0);
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Legacy Camera", meta = (AllowPrivateAccess = "true"))
+    FVector PoleCameraTargetOffset = FVector(0.0, 0.0, 24.0);
 
-    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Camera", meta = (AllowPrivateAccess = "true", ClampMin = "40", ClampMax = "110"))
-    float PoleCameraFOV = 72.0f;
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Legacy Camera", meta = (AllowPrivateAccess = "true", ClampMin = "40", ClampMax = "110"))
+    float PoleCameraFOV = 68.0f;
 
-    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Camera", meta = (AllowPrivateAccess = "true", ClampMin = "0.5"))
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Legacy Camera", meta = (AllowPrivateAccess = "true", ClampMin = "0.5"))
     float CameraBlendSpeed = 4.5f;
 
-    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Camera", meta = (AllowPrivateAccess = "true", ClampMin = "-60", ClampMax = "20"))
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Legacy Camera", meta = (AllowPrivateAccess = "true", ClampMin = "-60", ClampMax = "20"))
     float InitialCameraPitch = -15.0f;
 
-    /** Subtle additive pitch bias (degrees, negative looks further down) smoothly applied while on poles and released on ground. */
-    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Camera", meta = (AllowPrivateAccess = "true", ClampMin = "-25", ClampMax = "15"))
-    float PoleCameraPitchOffset = -5.0f;
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Plum Pole|Legacy Camera", meta = (AllowPrivateAccess = "true", ClampMin = "-25", ClampMax = "15"))
+    float PoleCameraPitchOffset = 0.0f;
 
+    // --- PBZ Timeline Animation Sequences ---
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|PBZ Animation", meta = (AllowPrivateAccess = "true"))
+    TObjectPtr<UAnimSequence> DashSequence;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|PBZ Animation", meta = (AllowPrivateAccess = "true"))
+    TObjectPtr<UAnimSequence> JumpLSequence;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|PBZ Animation", meta = (AllowPrivateAccess = "true"))
+    TObjectPtr<UAnimSequence> JumpRSequence;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|PBZ Animation", meta = (AllowPrivateAccess = "true"))
+    TObjectPtr<UAnimSequence> IdleLSequence;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|PBZ Animation", meta = (AllowPrivateAccess = "true"))
+    TObjectPtr<UAnimSequence> IdleRSequence;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|PBZ Animation", meta = (AllowPrivateAccess = "true"))
+    TObjectPtr<UAnimSequence> JumpToPlatformLSequence;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|PBZ Animation", meta = (AllowPrivateAccess = "true"))
+    TObjectPtr<UAnimSequence> JumpToPlatformRSequence;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|PBZ Animation", meta = (AllowPrivateAccess = "true"))
+    TObjectPtr<UAnimSequence> JumpOffSequence;
+
+    // --- Legacy animation properties retained for BP_SoulThirdPerson compatibility ---
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|Animation", meta = (AllowPrivateAccess = "true"))
     TObjectPtr<UAnimSequence> EnterPole;
 
@@ -206,7 +299,6 @@ private:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|Animation", meta = (AllowPrivateAccess = "true"))
     TObjectPtr<UAnimSequence> ExitPole;
 
-    /** Optional separate exit for a left-foot perch. The mirror table applies when this is unset. */
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|Animation", meta = (AllowPrivateAccess = "true"))
     TObjectPtr<UAnimSequence> ExitPoleLeft;
 
@@ -219,11 +311,9 @@ private:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|Animation", meta = (AllowPrivateAccess = "true"))
     TObjectPtr<UMirrorDataTable> ExitMirrorTable;
 
-    /** Normalized source clip ranges. Time in the range follows the traversal progress. */
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|Animation", meta = (AllowPrivateAccess = "true", ClampMin = "0", ClampMax = "1"))
     FVector2D EnterSection = FVector2D(0.0, 1.310 / 1.983333);
 
-    /** PBZ Dodge_F_R ground entry lands on the left foot (false). Set true if using a right-foot entry clip. */
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|Animation", meta = (AllowPrivateAccess = "true"))
     bool bEnterLandsOnRightFoot = false;
 
@@ -257,7 +347,6 @@ private:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|Animation", meta = (AllowPrivateAccess = "true", ClampMin = "0"))
     float GroundBlendTime = 0.30f;
 
-    /** Height of Manny's ball bone above the visible boot sole at the pole contact. */
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Plum Pole|Animation", meta = (AllowPrivateAccess = "true", ClampMin = "0"))
     float PoleSoleHeight = 0.75f;
 
@@ -267,9 +356,24 @@ private:
     UPROPERTY(Transient)
     TObjectPtr<UCameraComponent> CachedFollowCamera;
 
+    // Finite-duration 0.5 s PBZ additive camera state (bound to the specific SpringArm that received the additive offset)
+    TWeakObjectPtr<USpringArmComponent> AppliedCameraSpringArm;
+    float AppliedAdditiveArmLength = 0.0f;
+    FVector AppliedAdditiveSocketOffset = FVector::ZeroVector;
+    float CameraBlendStartArm = 0.0f;
+    float CameraBlendTargetArm = 0.0f;
+    FVector CameraBlendStartSocket = FVector::ZeroVector;
+    FVector CameraBlendTargetSocket = FVector::ZeroVector;
+    float CameraBlendElapsed = 0.0f;
+    bool bCameraBlending = false;
+
     TWeakObjectPtr<APlumPoleActor> PromptTargetPole;
+    EPlumPoleInteractUIState CurrentPromptUIState = EPlumPoleInteractUIState::None;
+    FVector LastPromptDisplayWorldLocation = FVector::ZeroVector;
+    FVector2D LastValidScreenEdgeDir = FVector2D(0.0, 1.0);
+    bool bLastPromptWasScreenEdge = false;
     float PromptAlpha = 0.0f;
-    float AppliedPolePitchOffset = 0.0f;
     bool bUsingGamepad = false;
-    bool bRightFootSupport = true;
+    bool bInteractPromptInCombat = false;
+    EPlumPoleGamepadIconStyle InteractPromptGamepadStyle = EPlumPoleGamepadIconStyle::Xbox;
 };

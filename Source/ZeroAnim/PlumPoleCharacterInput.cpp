@@ -7,6 +7,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
+#include "InputActionValue.h"
 #include "InputMappingContext.h"
 
 class FPlumPoleInputDeviceProcessor final : public IInputProcessor
@@ -96,23 +97,31 @@ void APlumPoleCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
     {
         RegisterInputDeviceDetector();
     }
-    if (!EnhancedInput || !Player || !PoleInputMappingContext || !PoleFlipInputAction)
+    if (!EnhancedInput || !Player)
     {
         return;
     }
 
-    UEnhancedInputLocalPlayerSubsystem* Input = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(Player->GetLocalPlayer());
-    if (!Input)
+    if (PoleInputMappingContext)
     {
-        return;
+        if (UEnhancedInputLocalPlayerSubsystem* Input = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(Player->GetLocalPlayer()))
+        {
+            if (!Input->HasMappingContext(PoleInputMappingContext))
+            {
+                Input->AddMappingContext(PoleInputMappingContext, 0);
+                PoleInputOwner = Input;
+            }
+        }
     }
 
-    if (!Input->HasMappingContext(PoleInputMappingContext))
+    if (PoleFlipInputAction)
     {
-        Input->AddMappingContext(PoleInputMappingContext, 0);
-        PoleInputOwner = Input;
+        EnhancedInput->BindAction(PoleFlipInputAction, ETriggerEvent::Started, this, &APlumPoleCharacter::HandlePoleFlipInput);
     }
-    EnhancedInput->BindAction(PoleFlipInputAction, ETriggerEvent::Started, this, &APlumPoleCharacter::HandlePoleFlipInput);
+    if (PoleMoveInputAction)
+    {
+        EnhancedInput->BindAction(PoleMoveInputAction, ETriggerEvent::Triggered, this, &APlumPoleCharacter::HandlePoleMoveInput);
+    }
 }
 
 void APlumPoleCharacter::NotifyControllerChanged()
@@ -124,6 +133,7 @@ void APlumPoleCharacter::NotifyControllerChanged()
 
 void APlumPoleCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+    RestoreAppliedCameraAdditive();
     RemovePoleInputContext();
     UnregisterInputDeviceDetector();
     Super::EndPlay(EndPlayReason);
@@ -141,4 +151,9 @@ void APlumPoleCharacter::RemovePoleInputContext()
 void APlumPoleCharacter::HandlePoleFlipInput()
 {
     PlumPoleTraversal->TryPoleFlip();
+}
+
+void APlumPoleCharacter::HandlePoleMoveInput(const FInputActionValue& Value)
+{
+    PlumPoleTraversal->OnMove2D(Value.Get<FVector2D>());
 }
