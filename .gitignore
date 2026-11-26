@@ -72,3 +72,8 @@ Plugins/**/Intermediate/*
 
 # Cache files for the editor to use
 DerivedDataCache/*
+
+# Large external plugin assets (distributed via ZeroAnim_RuntimeAssets.zip) & raw export backups
+Plugins/HuaShiraRecovered/
+RawAssets/
+ZeroAnim_RuntimeAssets*.zip
