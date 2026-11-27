@@ -1,4 +1,5 @@
 #include "PlumPoleTraversalComponent.h"
+#include "PlumPoleAudio.h"
 
 #include "Animation/AnimSequence.h"
 #include "Components/CapsuleComponent.h"
@@ -492,6 +493,7 @@ void UPlumPoleTraversalComponent::BeginPlay()
     if (CharacterMovement)
     {
         AddTickPrerequisiteComponent(CharacterMovement);
+        PlumPoleAudio::Register(Character);
     }
     else
     {
@@ -501,6 +503,7 @@ void UPlumPoleTraversalComponent::BeginPlay()
 
 void UPlumPoleTraversalComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+    PlumPoleAudio::Unregister(Character);
     if (bPoleAbilityActive)
     {
         ExitGravityScaleWindow();
@@ -1093,6 +1096,10 @@ void UPlumPoleTraversalComponent::EndPoleAbility(bool bInterruptedByMove)
     bActiveTimelineChained = false;
     bCamResetTriggeredForTimeline = false;
     bNaturalBlendOutTriggered = false;
+    bJumpOffAirborne = false;
+    bJumpOffRightFootLanded = false;
+    bJumpOffLeftFootLanded = false;
+    JumpOffRightFootLandAnimTime = -1.0f;
     ActionPhase = EPlumPoleActionPhase::None;
     ActiveTimeline = EPlumPoleTimeline::None;
     ActiveAnimTime = 0.0f;
@@ -1104,6 +1111,7 @@ void UPlumPoleTraversalComponent::EndPoleAbility(bool bInterruptedByMove)
     // If natural auto-blend-out already completed uninterrupted, AnimInstance already blended out cleanly at 1.025 s/s!
     if (bInterruptedByMove || !bWasNaturalBlendOut)
     {
+        PlumPoleAudio::BlendOut(Character, LeavingTimeline, LeavingAnimTime, GetTimelineSpec(LeavingTimeline).BlendOutTime, PendingTransitionRemainingDelta);
         OnTimelineChanged.Broadcast(LeavingTimeline, EPlumPoleTimeline::None, 0.0f, LeavingAnimTime, 1.0f, false);
     }
     PendingTransitionRemainingDelta = -1.0f;
@@ -1257,6 +1265,10 @@ void UPlumPoleTraversalComponent::StartTimeline(
     bActiveTimelineChained = bChained;
     bCamResetTriggeredForTimeline = false;
     bNaturalBlendOutTriggered = false;
+    bJumpOffAirborne = false;
+    bJumpOffRightFootLanded = false;
+    bJumpOffLeftFootLanded = false;
+    JumpOffRightFootLandAnimTime = -1.0f;
     CachedRMInputDirection = FVector::ZeroVector;
 
     WarpOriginLocation = Character->GetActorLocation();
@@ -1280,6 +1292,8 @@ void UPlumPoleTraversalComponent::StartTimeline(
 
     // Any interrupted timeline drops immediately to 1.000 s/s during its blend-out (matching PBZ V6).
     const float OutgoingRate = 1.0f;
+    PlumPoleAudio::BlendOut(Character, PrevTimeline, PrevAnimTime, GetTimelineSpec(PrevTimeline).BlendOutTime, PendingTransitionRemainingDelta);
+    PlumPoleAudio::Advance(Character, NewTimeline, -1.0f, ResolvedStart, true);
     OnTimelineChanged.Broadcast(PrevTimeline, NewTimeline, ResolvedStart, PrevAnimTime, OutgoingRate, false);
     ChangeState(NewState, StatePole, /*bForceBroadcast=*/true);
 }
@@ -1453,6 +1467,35 @@ void UPlumPoleTraversalComponent::AdvanceActiveTimeline(float DeltaTime)
             ApplySkewWarpMotion(PrevTime, StepEndTime, StepDt);
         }
 
+        PlumPoleAudio::Advance(Character, ActiveTimeline, PrevTime, StepEndTime);
+        if (ActiveTimeline == EPlumPoleTimeline::JumpOff && IsValid(CharacterMovement))
+        {
+            if (CharacterMovement->MovementMode == MOVE_Falling)
+            {
+                bJumpOffAirborne = true;
+            }
+            const bool bOnGround = CharacterMovement->IsMovingOnGround();
+            if (!bJumpOffRightFootLanded)
+            {
+                const bool bPhysicsTouchdown = bJumpOffAirborne && bOnGround && StepEndTime >= 0.55f;
+                const bool bFallbackTouchdown = !bJumpOffAirborne && bOnGround && StepEndTime >= 1.320f;
+                if (bPhysicsTouchdown || bFallbackTouchdown)
+                {
+                    bJumpOffRightFootLanded = true;
+                    JumpOffRightFootLandAnimTime = StepEndTime;
+                    PlumPoleAudio::PlayFootstep(Character, ActiveTimeline, /*bLeftFoot=*/false, StepEndTime);
+                }
+            }
+            if (bJumpOffRightFootLanded && !bJumpOffLeftFootLanded)
+            {
+                const float LeftTargetTime = FMath::Max(JumpOffRightFootLandAnimTime + 0.035f, 1.345f);
+                if (bOnGround && StepEndTime >= LeftTargetTime)
+                {
+                    bJumpOffLeftFootLanded = true;
+                    PlumPoleAudio::PlayFootstep(Character, ActiveTimeline, /*bLeftFoot=*/true, StepEndTime);
+                }
+            }
+        }
         if (bGravityOverrideActive)
         {
             GravityActiveWallDtThisFrame += StepDt;

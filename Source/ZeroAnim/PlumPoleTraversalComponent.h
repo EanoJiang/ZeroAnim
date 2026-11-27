@@ -472,6 +472,10 @@ private:
     bool bCamResetTriggeredForTimeline = false;
     bool bNaturalBlendOutTriggered = false;
     bool bDynamicTargetRefreshActive = false;
+    bool bJumpOffAirborne = false;
+    bool bJumpOffRightFootLanded = false;
+    bool bJumpOffLeftFootLanded = false;
+    float JumpOffRightFootLandAnimTime = -1.0f;
 
     // Warp target & motion state
     FVector LastTargetLocation = FVector::ZeroVector;
