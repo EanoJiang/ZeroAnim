@@ -1,0 +1,2797 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>从零搭建 UE5 跳桩能力 — 第三人称模板交互式实战教程（源码联动版）</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <script>
+    window.__POLE_THEMES = {
+      light: {
+        '--background': '#f7f5f0',
+        '--sidebar': '#efece4',
+        '--card': '#ffffff',
+        '--content': '#f3f0e8',
+        '--border': '#dcd7cb',
+        '--card-border': '#e7e3d9',
+        '--foreground': '#1f1e1a',
+        '--muted-foreground': '#5e5b52',
+        '--code-foreground': '#26241f',
+        '--code-bg': '#ebe7dd',
+        '--primary': '#0f766e',
+        '--primary-foreground': '#ffffff',
+        '--secondary': '#e5e0d4',
+        '--secondary-foreground': '#1f1e1a',
+        '--accent': '#e8e4da',
+        '--link': '#0369a1',
+        '--success': '#15803d',
+        '--warning': '#b45309',
+        '--error': '#b91c1c',
+        '--chart-1': '#c26d18',
+        '--chart-2': '#0284c7',
+        '--chart-3': '#059669',
+        '--chart-4': '#7c3aed',
+        '--chart-5': '#be123c',
+        '--chart-6': '#0f766e',
+        '--card-shadow': '0 1px 3px rgba(28, 25, 20, 0.06)'
+      },
+      dark: {
+        '--background': '#131418',
+        '--sidebar': '#181a20',
+        '--card': '#1e2028',
+        '--content': '#16181e',
+        '--border': '#303440',
+        '--card-border': '#282c36',
+        '--foreground': '#eceef2',
+        '--muted-foreground': '#9da3b0',
+        '--code-foreground': '#e2e6ef',
+        '--code-bg': '#15171d',
+        '--primary': '#14b8a6',
+        '--primary-foreground': '#06211e',
+        '--secondary': '#272a35',
+        '--secondary-foreground': '#eceef2',
+        '--accent': '#262934',
+        '--link': '#5eead4',
+        '--success': '#34d399',
+        '--warning': '#fbbf24',
+        '--error': '#f87171',
+        '--chart-1': '#f59e0b',
+        '--chart-2': '#38bdf8',
+        '--chart-3': '#34d399',
+        '--chart-4': '#a78bfa',
+        '--chart-5': '#fb7185',
+        '--chart-6': '#2dd4bf',
+        '--card-shadow': '0 2px 8px rgba(0, 0, 0, 0.22)'
+      }
+    };
+
+    window.applyTutorialTheme = function (mode, persist) {
+      const root = document.documentElement;
+      const resolved = mode === 'light' ? 'light' : 'dark';
+      const vars = window.__POLE_THEMES[resolved];
+      root.classList.toggle('light', resolved === 'light');
+      root.dataset.theme = resolved;
+      Object.entries(vars).forEach(([k, v]) => root.style.setProperty(k, v));
+      if (persist) {
+        try { localStorage.setItem('zeroanim_pole_theme', resolved); } catch (e) {}
+      }
+      const btn = document.getElementById('themeToggleBtn');
+      if (btn) {
+        btn.textContent = resolved === 'light' ? '🌙 切换深色' : '☀️ 切换浅色';
+        btn.title = resolved === 'light' ? '切换到护眼深色模式' : '切换到暖纸浅色模式';
+      }
+      window.dispatchEvent(new Event('themechange'));
+    };
+
+    (function () {
+      let saved = null;
+      try { saved = localStorage.getItem('zeroanim_pole_theme'); } catch (e) {}
+      const hostHasVars = !!getComputedStyle(document.documentElement).getPropertyValue('--primary').trim();
+      if (saved === 'light' || saved === 'dark') {
+        window.applyTutorialTheme(saved, false);
+      } else if (!hostHasVars) {
+        const preferLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+        window.applyTutorialTheme(preferLight ? 'light' : 'dark', false);
+      }
+    })();
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      transition: background-color 0.2s ease, color 0.2s ease;
+    }
+    pre {
+      overflow-x: auto;
+      line-height: 1.6;
+      tab-size: 4;
+    }
+    .code-block {
+      background: var(--code-bg, var(--content));
+      border: 1px solid var(--border);
+      color: var(--code-foreground);
+    }
+    .surface-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      box-shadow: var(--card-shadow, none);
+    }
+    code:not(pre code) {
+      background: color-mix(in srgb, var(--foreground) 7%, transparent);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    .step-btn[data-active="true"] {
+      background: var(--primary);
+      color: var(--primary-foreground);
+      border-color: var(--primary);
+      box-shadow: 0 2px 6px color-mix(in srgb, var(--primary) 28%, transparent);
+    }
+    .step-btn[data-active="false"]:hover {
+      background: var(--accent);
+    }
+    .tab-pill[data-active="true"] {
+      background: var(--primary);
+      color: var(--primary-foreground);
+      border-color: var(--primary);
+    }
+    .tab-pill[data-active="false"] {
+      background: var(--content);
+      color: var(--foreground);
+      border-color: var(--border);
+    }
+    .tab-pill[data-active="false"]:hover {
+      background: var(--accent);
+    }
+    .arch-node {
+      min-width: 0;
+      overflow: hidden;
+      transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+      cursor: pointer;
+      border-top-width: 3px;
+    }
+    .arch-node:hover {
+      transform: translateY(-2px);
+    }
+    .arch-node[data-selected="true"] {
+      border-color: var(--node-accent, var(--primary));
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--node-accent, var(--primary)) 28%, transparent);
+    }
+    .layer-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 1px 8px;
+      border-radius: 9999px;
+      background: color-mix(in srgb, var(--node-accent, var(--primary)) 14%, transparent);
+      color: var(--node-accent, var(--primary));
+    }
+    .badge-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 9px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
+      background: color-mix(in srgb, var(--primary) 10%, var(--content));
+      color: var(--primary);
+    }
+    .pin-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 9999px;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+    /* Relative Code Hyperlinks — overflow-safe & low-glare */
+    a.code-link {
+      color: var(--link);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.88em;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: color-mix(in srgb, var(--link) 11%, transparent);
+      border-bottom: 1px dashed color-mix(in srgb, var(--link) 50%, transparent);
+      text-decoration: none;
+      display: inline;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      line-height: 1.45;
+      transition: background 0.15s ease, border-color 0.15s ease;
+      cursor: pointer;
+    }
+    .arch-node a.code-link {
+      display: inline-flex;
+      align-items: center;
+      max-width: 100%;
+      white-space: normal;
+      padding: 2px 6px;
+      font-size: 12px;
+    }
+    a.code-link:hover {
+      background: color-mix(in srgb, var(--link) 22%, transparent);
+      border-bottom-style: solid;
+      border-bottom-color: var(--link);
+    }
+    a.code-link::after {
+      content: " ↗";
+      font-size: 0.78em;
+      opacity: 0.65;
+      flex-shrink: 0;
+    }
+    a.file-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      color: var(--link);
+      background: var(--content);
+      border: 1px solid color-mix(in srgb, var(--link) 32%, var(--border));
+      text-decoration: none;
+      transition: background 0.15s ease, border-color 0.15s ease;
+      cursor: pointer;
+    }
+    a.file-pill:hover {
+      background: color-mix(in srgb, var(--link) 16%, var(--content));
+      border-color: var(--link);
+    }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-track { background: transparent; }
+  </style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased m-0 p-0">
+  <div class="min-h-screen flex flex-col">
+    <!-- Top Header -->
+    <header class="sticky top-0 z-30 bg-[var(--sidebar)] border-b border-[var(--border)]">
+      <div class="px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm" style="background: var(--primary); color: var(--primary-foreground);">桩</div>
+          <div>
+            <h1 class="text-base font-bold leading-tight">从第三人称模板从零搭建 UE5 跳桩能力</h1>
+            <p class="text-xs text-[var(--muted-foreground)]">基于 ZeroAnim 项目源码（PBZ GA_StandingOnPole 1:1 架构 · 相对路径源码行号联动）</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2.5 flex-wrap">
+          <button id="themeToggleBtn" class="px-2.5 py-1.5 rounded-md text-xs font-medium border border-[var(--border)] bg-[var(--card)] hover:bg-[var(--accent)] cursor-pointer" title="切换浅色/深色主题">☀️ 切换浅色</button>
+          <div class="hidden sm:flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
+            <span>学习进度</span>
+            <div class="w-24 h-2 rounded-full overflow-hidden bg-[var(--content)] border border-[var(--border)]">
+              <div id="topProgressBar" class="h-full transition-all duration-300" style="width: 12.5%; background: var(--primary);"></div>
+            </div>
+            <span id="topProgressText" class="font-mono tabular-nums text-[var(--foreground)]">1 / 8</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button id="prevStepBtn" class="px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--border)] bg-[var(--card)] hover:bg-[var(--accent)] disabled:opacity-40 cursor-pointer">← 上一步</button>
+            <button id="nextStepBtn" class="px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer" style="background: var(--primary); color: var(--primary-foreground);">下一步 →</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- IDE Jump Toolbar -->
+      <div class="px-5 py-2 border-t border-[var(--card-border)] bg-[var(--card)] flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-[var(--muted-foreground)] font-medium">解决方案直跳：</span>
+          <a href="../ZeroAnim.sln" class="file-pill" title="用关联 IDE 打开解决方案 ..\ZeroAnim.sln">📂 ~/ZeroAnim.sln</a>
+          <a href="../ZeroAnim.uproject" class="file-pill" title="打开工程描述 ..\ZeroAnim.uproject">🎮 ~/ZeroAnim.uproject</a>
+          <a class="code-link" href="../Config/DefaultEngine.ini#L7" data-rel="Config/DefaultEngine.ini" data-line="7">DefaultEngine.ini</a>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <label for="ideModeSelect" class="text-[var(--muted-foreground)]">点击代码链接跳转方式：</label>
+          <select id="ideModeSelect" class="px-2.5 py-1 rounded-md text-xs bg-[var(--content)] text-[var(--foreground)] border border-[var(--border)] cursor-pointer">
+            <option value="rider">Rider 协议 (jetbrains:// 打开或跳转方案)</option>
+            <option value="rider63342">Rider 本地直连 (63342 已开方案无弹窗秒跳)</option>
+            <option value="vscode">VS Code (相对路径直跳行号)</option>
+            <option value="antigravity">Antigravity (相对路径直跳行号)</option>
+            <option value="vs2022">VS 2022 (复制 Ctrl+T / devenv 定位)</option>
+            <option value="file">纯相对文件 (../Source/...#L)</option>
+          </select>
+          <button id="openIndexBtn" class="px-2.5 py-1 rounded-md text-xs font-medium border border-[var(--border)] bg-[var(--content)] hover:bg-[var(--accent)] cursor-pointer">📑 全量源码行号索引</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Layout -->
+    <div class="flex-1 flex flex-col lg:flex-row">
+      <!-- Left Sidebar Navigation -->
+      <aside class="lg:w-72 shrink-0 bg-[var(--sidebar)] border-b lg:border-b-0 lg:border-r border-[var(--border)] p-4 lg:sticky lg:top-[104px] lg:self-start lg:max-h-[calc(100vh-104px)] lg:overflow-y-auto">
+        <div class="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)] mb-2.5 px-1">教程目录（支持键盘 ← / →）</div>
+        <nav id="stepNav" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-1 gap-1.5"></nav>
+
+        <div class="mt-5 p-3 rounded-lg bg-[var(--card)] border border-[var(--border)] text-xs space-y-2 hidden lg:block">
+          <div class="font-semibold text-[var(--foreground)]">对照源码使用指南</div>
+          <ul class="space-y-1.5 text-[var(--muted-foreground)] list-disc pl-4 leading-relaxed">
+            <li>正文与图表中所有<span style="color: var(--link);">带 ↗ 虚线的标识符</span>均基于相对路径 <code>../</code> 指向源码精确行号，悬浮可预览完整路径与行号。</li>
+            <li>右上角可一键切换 <strong>☀️ 浅色 / 🌙 深色</strong> 护眼背景，画布图表会自动同步配色。</li>
+            <li>点击 <strong>📑 全量源码行号索引</strong> 可按关键词搜索全部 17 个文件与 70+ 核心函数。</li>
+          </ul>
+        </div>
+      </aside>
+
+      <!-- Content Area -->
+      <main class="flex-1 min-w-0 p-5 lg:p-7 max-w-6xl w-full mx-auto space-y-6">
+        <!-- STEP 0 -->
+        <section class="step-panel space-y-5" data-step="0">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div class="badge-chip mb-2">Step 1 / 8 · 架构总览</div>
+              <h2 class="text-xl font-bold">先理清全局架构：为什么不直接在蓝图里硬写跳桩？</h2>
+              <p class="text-sm text-[var(--muted-foreground)] mt-1 leading-relaxed">
+                UE 5.8 第三人称模板默认由 <code class="font-mono text-xs px-1 py-0.5 rounded bg-[var(--content)]">BP_ThirdPersonCharacter</code> + <code class="font-mono text-xs px-1 py-0.5 rounded bg-[var(--content)]">ABP_Unarmed</code> + <code class="font-mono text-xs px-1 py-0.5 rounded bg-[var(--content)]">BP_ThirdPersonPlayerController</code> 组成。
+                本项目在 <a href="../ZeroAnim.sln" class="file-pill">ZeroAnim.sln</a> 中采用 <strong>4 层 C++ 基类与组件</strong>（<a class="code-link" href="../Source/ZeroAnim/PlumPoleActor.h#L12" data-rel="Source/ZeroAnim/PlumPoleActor.h" data-line="12">APlumPoleActor</a>、<a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L64" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="64">APlumPoleCharacter</a>、<a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.h#L105" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.h" data-line="105">UPlumPoleTraversalComponent</a>、<a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.h#L22" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.h" data-line="22">UPlumPoleAnimInstance</a>）在底层接管跳桩，让角色蓝图和动画蓝图只需 <strong>Reparent（改父类）+ 极少量连线</strong>。
+              </p>
+            </div>
+          </div>
+
+          <!-- Interactive Architecture Explorer -->
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="font-semibold text-sm">交互式系统链路图（点击卡片切换详解，点击卡片上的 .h / .cpp 徽章直接跳进源码）</div>
+              <span class="text-xs text-[var(--muted-foreground)]">
+                Tick 顺序：<code>CMC</code> →
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L495" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="495">PlumPoleTraversal</a> →
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L222" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="222">SkeletalMesh(ABP)</a>
+              </span>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3.5 items-stretch">
+              <div class="arch-node text-left p-3.5 rounded-lg bg-[var(--content)] border border-[var(--border)] flex flex-col justify-between gap-3" style="--node-accent: var(--chart-1); border-top-color: var(--chart-1);" data-arch="pole" data-selected="false">
+                <div>
+                  <span class="layer-tag">场景层</span>
+                  <div class="font-bold text-sm mt-2">APlumPoleActor</div>
+                  <div class="text-xs text-[var(--muted-foreground)] mt-1">梅花桩 / 出口桩 / 防跳落保护区</div>
+                </div>
+                <div class="flex flex-wrap gap-1.5 pt-2 border-t border-[var(--card-border)]">
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleActor.h#L12" data-rel="Source/ZeroAnim/PlumPoleActor.h" data-line="12">PlumPoleActor.h</a>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleActor.cpp#L15" data-rel="Source/ZeroAnim/PlumPoleActor.cpp" data-line="15">PlumPoleActor.cpp</a>
+                </div>
+              </div>
+
+              <div class="arch-node text-left p-3.5 rounded-lg bg-[var(--content)] border border-[var(--border)] flex flex-col justify-between gap-3" style="--node-accent: var(--chart-2); border-top-color: var(--chart-2);" data-arch="char" data-selected="false">
+                <div>
+                  <span class="layer-tag">角色桥接层</span>
+                  <div class="font-bold text-sm mt-2">APlumPoleCharacter</div>
+                  <div class="text-xs text-[var(--muted-foreground)] mt-1">BP_SoulThirdPerson 父类（输入 / 镜头 / UI）</div>
+                </div>
+                <div class="flex flex-wrap gap-1.5 pt-2 border-t border-[var(--card-border)]">
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L64" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="64">PlumPoleCharacter.h</a>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L44" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="44">PlumPoleCharacter.cpp</a>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacterInput.cpp#L91" data-rel="Source/ZeroAnim/PlumPoleCharacterInput.cpp" data-line="91">PlumPoleCharacterInput.cpp</a>
+                </div>
+              </div>
+
+              <div class="arch-node text-left p-3.5 rounded-lg bg-[var(--content)] border border-[var(--border)] flex flex-col justify-between gap-3" style="--node-accent: var(--chart-3); border-top-color: var(--chart-3);" data-arch="comp" data-selected="true">
+                <div>
+                  <span class="layer-tag">核心状态机</span>
+                  <div class="font-bold text-sm mt-2">PlumPoleTraversal</div>
+                  <div class="text-xs text-[var(--muted-foreground)] mt-1">ActorComponent 大脑（选桩 / 8 时间轴 / SkewWarp）</div>
+                </div>
+                <div class="flex flex-wrap gap-1.5 pt-2 border-t border-[var(--card-border)]">
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.h#L105" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.h" data-line="105">PlumPoleTraversalComponent.h</a>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L371" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="371">PlumPoleTraversalComponent.cpp</a>
+                </div>
+              </div>
+
+              <div class="arch-node text-left p-3.5 rounded-lg bg-[var(--content)] border border-[var(--border)] flex flex-col justify-between gap-3" style="--node-accent: var(--chart-4); border-top-color: var(--chart-4);" data-arch="anim" data-selected="false">
+                <div>
+                  <span class="layer-tag">动画代理层</span>
+                  <div class="font-bold text-sm mt-2">PlumPoleAnimInstance</div>
+                  <div class="text-xs text-[var(--muted-foreground)] mt-1">ABP_PlumPoleManny 父类（Proxy 多层混合 / FootIK）</div>
+                </div>
+                <div class="flex flex-wrap gap-1.5 pt-2 border-t border-[var(--card-border)]">
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.h#L22" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.h" data-line="22">PlumPoleAnimInstance.h</a>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L148" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="148">PlumPoleAnimInstance.cpp</a>
+                </div>
+              </div>
+
+              <div class="arch-node text-left p-3.5 rounded-lg bg-[var(--content)] border border-[var(--border)] flex flex-col justify-between gap-3 sm:col-span-2 xl:col-span-2" style="--node-accent: var(--chart-5); border-top-color: var(--chart-5);" data-arch="ui" data-selected="false">
+                <div>
+                  <span class="layer-tag">交互表现层</span>
+                  <div class="font-bold text-sm mt-2">PromptWidget &amp; Audio</div>
+                  <div class="text-xs text-[var(--muted-foreground)] mt-1">桩顶 5 状态 Slate UI 提示 + 键鼠/手柄图标热切 + 脚步与风声音效</div>
+                </div>
+                <div class="flex flex-wrap gap-1.5 pt-2 border-t border-[var(--card-border)]">
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleInteractPromptWidget.h#L42" data-rel="Source/ZeroAnim/PlumPoleInteractPromptWidget.h" data-line="42">PlumPoleInteractPromptWidget.h</a>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleInteractPromptWidget.cpp#L366" data-rel="Source/ZeroAnim/PlumPoleInteractPromptWidget.cpp" data-line="366">PlumPoleInteractPromptWidget.cpp</a>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleAudio.cpp#L71" data-rel="Source/ZeroAnim/PlumPoleAudio.cpp" data-line="71">PlumPoleAudio.cpp</a>
+                </div>
+              </div>
+            </div>
+
+            <div id="archDetailBox" class="p-4 rounded-lg bg-[var(--content)] border border-[var(--border)] space-y-2 text-sm"></div>
+          </div>
+
+          <!-- Comparison Grid -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="surface-card rounded-xl p-4 space-y-2 border-l-4" style="border-left-color: var(--warning);">
+              <div class="font-semibold text-sm flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full" style="background: var(--warning);"></span>
+                原版第三人称模板（起点）
+              </div>
+              <ul class="text-xs text-[var(--muted-foreground)] space-y-1.5 list-disc pl-4 leading-relaxed">
+                <li><code class="font-mono text-[var(--foreground)]">Content/ThirdPerson/Blueprints/BP_ThirdPersonCharacter</code>：继承 <code>ACharacter</code>，绑定 <code>IA_Move / IA_Look / IA_Jump</code>，自带 <code>CameraBoom</code> 与 <code>FollowCamera</code>。</li>
+                <li><code class="font-mono text-[var(--foreground)]">Content/Characters/Mannequins/Anims/Unarmed/ABP_Unarmed</code>：继承 <code>UAnimInstance</code>，状态机驱动 <code>BS_Idle_Walk_Run</code> + 跳跃落地 + <code>CR_Mannequin_FootIK</code>。</li>
+                <li><code class="font-mono text-[var(--foreground)]">Content/ThirdPerson/Blueprints/BP_ThirdPersonPlayerController</code>：在本地玩家上添加 <code>IMC_Default</code> 和 <code>IMC_MouseLook</code>。</li>
+              </ul>
+            </div>
+            <div class="surface-card rounded-xl p-4 space-y-2 border-l-4" style="border-left-color: var(--success);">
+              <div class="font-semibold text-sm flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full" style="background: var(--success);"></span>
+                改造完成后（终点）
+              </div>
+              <ul class="text-xs text-[var(--muted-foreground)] space-y-1.5 list-disc pl-4 leading-relaxed">
+                <li><code class="font-mono text-[var(--foreground)]">Content/PlumPole/BP_SoulThirdPerson</code>：仅 <strong>Reparent → <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L64" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="64">APlumPoleCharacter</a></strong>、换网格/动画类、配置 <code>IMC_PlumPole / IA_PoleFlip / WBP</code>，原输入蓝图全保留！</li>
+                <li><code class="font-mono text-[var(--foreground)]">Content/PlumPole/ABP_PlumPoleManny</code>：复制 <code>ABP_Unarmed</code> 后 <strong>Reparent → <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.h#L22" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.h" data-line="22">UPlumPoleAnimInstance</a></strong>，仅把 <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.h#L33" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.h" data-line="33">LegIKAlpha</a> 和 <code>NOT</code> <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.h#L29" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.h" data-line="29">bDisableLegIK</a> 连到 FootIK 节点！</li>
+                <li><code class="font-mono text-[var(--foreground)]">Content/PlumPole/BP_PlumPoleGameMode</code>：把 DefaultPawn 设为 <code>BP_SoulThirdPerson</code>，PlayerController 沿用原模板即可。</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- STEP 1 -->
+        <section class="step-panel space-y-5 hidden" data-step="1">
+          <div>
+            <div class="badge-chip mb-2">Step 2 / 8 · 工程与资产准备</div>
+            <h2 class="text-xl font-bold">配置 C++ 模块依赖、输入资产与 8 条动画序列</h2>
+            <p class="text-sm text-[var(--muted-foreground)] mt-1">
+              从第三人称蓝图模板新建项目后，先通过 <strong>Tools → New C++ Class</strong> 转成 C++ 混合工程，并准备好模块依赖、新增输入动作以及符合 RootMotion 规范的动画序列。
+            </p>
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-3">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="font-semibold text-sm">1. 配置模块依赖</div>
+                <a class="file-pill" href="../Source/ZeroAnim/ZeroAnim.Build.cs#L10" data-rel="Source/ZeroAnim/ZeroAnim.Build.cs" data-line="10">📄 ZeroAnim.Build.cs</a>
+              </div>
+              <p class="text-xs text-[var(--muted-foreground)] leading-relaxed">
+                跳桩需要 <a class="code-link" href="../Source/ZeroAnim/ZeroAnim.Build.cs#L11" data-rel="Source/ZeroAnim/ZeroAnim.Build.cs" data-line="11">EnhancedInput</a> 监听输入、<a class="code-link" href="../Source/ZeroAnim/ZeroAnim.Build.cs#L10" data-rel="Source/ZeroAnim/ZeroAnim.Build.cs" data-line="10">UMG / Slate / SlateCore / InputCore</a> 绘制桩顶提示图标。若不需要 Wwise 音效，将 <a class="code-link" href="../Source/ZeroAnim/ZeroAnim.Build.cs#L40" data-rel="Source/ZeroAnim/ZeroAnim.Build.cs" data-line="40">WITH_POLE_WWISE=0</a> 即可零外部依赖编译。
+              </p>
+              <pre class="code-block rounded-lg p-3 text-xs font-mono"><code>// Source/ZeroAnim/ZeroAnim.Build.cs (L10-L11, L40)
+PublicDependencyModuleNames.AddRange(new[] {
+    "Core", "CoreUObject", "Engine",
+    "UMG", "Slate", "SlateCore", "InputCore"
+});
+PrivateDependencyModuleNames.Add("EnhancedInput");
+
+// 纯跳桩玩法可先关闭 Wwise，后续再按需接入
+PrivateDefinitions.Add("WITH_POLE_WWISE=0");</code></pre>
+            </div>
+
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-3">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="font-semibold text-sm">2. 新建 2 个 Enhanced Input 资产</div>
+                <a class="file-pill" href="../Source/ZeroAnim/PlumPoleCharacterInput.cpp#L91" data-rel="Source/ZeroAnim/PlumPoleCharacterInput.cpp" data-line="91">📄 PlumPoleCharacterInput.cpp</a>
+              </div>
+              <p class="text-xs text-[var(--muted-foreground)] leading-relaxed">
+                模板已自带 <code>/Game/Input/Actions/IA_Move</code>（在 <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L65" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="65">PlumPoleCharacter.cpp</a> 自动查找）和 <code>IA_Jump</code>，我们只需新增“远翻/前翻”按键资产并在 <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacterInput.cpp#L105" data-rel="Source/ZeroAnim/PlumPoleCharacterInput.cpp" data-line="105">SetupPlayerInputComponent</a> 中绑定：
+              </p>
+              <div class="space-y-2 text-xs">
+                <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)]">
+                  <div class="font-bold">IA_PoleFlip <span class="font-mono font-normal text-[var(--muted-foreground)]">(/Game/PlumPole/Input/IA_PoleFlip)</span></div>
+                  <div class="text-[var(--muted-foreground)] mt-1">
+                    类型：<strong>Input Action</strong> · Value Type：<code>Digital (bool)</code> · 对应属性：
+                    <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L133" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="133">PoleFlipInputAction</a>
+                  </div>
+                </div>
+                <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)]">
+                  <div class="font-bold">IMC_PlumPole <span class="font-mono font-normal text-[var(--muted-foreground)]">(/Game/PlumPole/Input/IMC_PlumPole)</span></div>
+                  <div class="text-[var(--muted-foreground)] mt-1">
+                    类型：<strong>Input Mapping Context</strong> · 对应属性：
+                    <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L130" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="130">PoleInputMappingContext</a>
+                  </div>
+                  <div class="flex flex-wrap gap-1.5 mt-2">
+                    <span class="badge-chip font-mono">Left Shift</span>
+                    <span class="badge-chip font-mono">Gamepad Face Button Right (B/○)</span>
+                    <span class="badge-chip font-mono">Gamepad Right Shoulder (RB/R1)</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Animation Assets Table -->
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="font-semibold text-sm">3. 准备 8 条时间轴动画序列（关键：Root 轨道要求）</div>
+              <div class="flex flex-wrap gap-1.5">
+                <a class="file-pill" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L71" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="71">📄 PlumPoleCharacter.cpp</a>
+                <a class="file-pill" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L140" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="140">📄 PlumPoleCharacter.cpp</a>
+              </div>
+            </div>
+            <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)] text-xs text-[var(--muted-foreground)] leading-relaxed">
+              <strong class="text-[var(--foreground)]">Root Motion 为什么“既要开启，又要在 AnimInstance 里关掉”？</strong><br/>
+              8 条移动动画必须包含完整的 <strong>Root 骨骼位移轨道</strong>（开启 <code>bEnableRootMotion</code>），因为 <code>UPlumPoleTraversalComponent</code> 会在
+              <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1906" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1906">SampleActiveClipRootInActorSpace</a> 里调用
+              <code>ExtractRootTrackTransform()</code> 读取原始 3D 弧线，再经 SkewWarp 推胶囊体；同时 <code>UPlumPoleAnimInstance</code> 会在
+              <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L516" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="516">NativeInitializeAnimation</a> 设 <code>NoRootMotionExtraction</code>，并在
+              <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L143" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="143">FClipLayer::Sample</a> 把 <code>RootBone(0)</code> 重置为 <code>RefPose</code>，防止双倍位移！
+              <span class="block mt-1">（若自定义动画不含 Root 位移，会降级读取曲线 <code>PlumPoleSourceTravelForward / Up</code>：见 <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1926" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1926">SampleCurveTravelFallback</a>。）</span>
+            </div>
+
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs border-collapse">
+                <thead>
+                  <tr class="border-b border-[var(--border)] text-left text-[var(--muted-foreground)]">
+                    <th class="py-2 pr-3">时间轴枚举 (<a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.h#L34" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.h" data-line="34">EPlumPoleTimeline</a>)</th>
+                    <th class="py-2 pr-3">项目默认资产</th>
+                    <th class="py-2 pr-3">用途与触发时机</th>
+                    <th class="py-2 pr-3">Spec 源码位置</th>
+                    <th class="py-2">混合配置</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-[var(--border)] font-mono">
+                  <tr>
+                    <td class="py-2 pr-3 font-semibold"><a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L254" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="254">Dash</a></td>
+                    <td class="py-2 pr-3">AS_Manny_Hun_LionHead_Dodge_F_R</td>
+                    <td class="py-2 pr-3 font-sans">地面上桩 / 500cm 远翻</td>
+                    <td class="py-2 pr-3"><a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L77" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="77">DashSpec</a></td>
+                    <td class="py-2 font-sans"><a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L149" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="149">0.25s Hermite</a> → 1.325s <code>Idle_L</code></td>
+                  </tr>
+                  <tr>
+                    <td class="py-2 pr-3 font-semibold"><a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L257" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="257">Jump_L / Jump_R</a></td>
+                    <td class="py-2 pr-3">AS_Manny_PlumPole_HopFromLeft / Right</td>
+                    <td class="py-2 pr-3 font-sans">350cm 内近桩左右脚交替跳</td>
+                    <td class="py-2 pr-3">
+                      <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L103" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="103">JumpL</a>
+                      <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L134" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="134">JumpR</a>
+                    </td>
+                    <td class="py-2 font-sans"><a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L155" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="155">0.15s CircularIn</a> → 1.640s <code>Idle_R/L</code></td>
+                  </tr>
+                  <tr>
+                    <td class="py-2 pr-3 font-semibold"><a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L263" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="263">Idle_L / Idle_R</a></td>
+                    <td class="py-2 pr-3">AS_Manny_PlumPole_PerchLeft / Right</td>
+                    <td class="py-2 pr-3 font-sans">桩顶单脚待机（循环）</td>
+                    <td class="py-2 pr-3"><a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L144" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="144">IdleLSpec</a></td>
+                    <td class="py-2 font-sans"><a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L162" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="162">0.50s Hermite (Loop)</a></td>
+                  </tr>
+                  <tr>
+                    <td class="py-2 pr-3 font-semibold"><a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L269" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="269">JumpToPlatform_L/R</a></td>
+                    <td class="py-2 pr-3">AS_Manny_Hun_LionHead_JumpOut_L/R_02</td>
+                    <td class="py-2 pr-3 font-sans">平齐出口桩 (|ΔZ| &lt; 200cm)</td>
+                    <td class="py-2 pr-3"><a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L167" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="167">PlatformSpec</a></td>
+                    <td class="py-2 font-sans"><a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L25" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="25">BlendOut 0.30s CircularIn</a></td>
+                  </tr>
+                  <tr>
+                    <td class="py-2 pr-3 font-semibold"><a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L275" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="275">JumpOff</a></td>
+                    <td class="py-2 pr-3">AS_Manny_Hun_LionHead_JumpOut_R</td>
+                    <td class="py-2 pr-3 font-sans">主动跳下 / 高落差出口</td>
+                    <td class="py-2 pr-3"><a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L207" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="207">JumpOffSpec</a></td>
+                    <td class="py-2 font-sans"><a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L176" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="176">0.25s Hermite</a> + 低重力</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- STEP 2 -->
+        <section class="step-panel space-y-5 hidden" data-step="2">
+          <div>
+            <div class="badge-chip mb-2">Step 3 / 8 · 场景物件搭建</div>
+            <h2 class="text-xl font-bold">
+              搭建梅花桩（<a class="code-link" href="../Source/ZeroAnim/PlumPoleActor.h#L12" data-rel="Source/ZeroAnim/PlumPoleActor.h" data-line="12">APlumPoleActor</a>）与防跳落保护区（<a class="code-link" href="../Source/ZeroAnim/PlumPoleProtectVolume.h#L17" data-rel="Source/ZeroAnim/PlumPoleProtectVolume.h" data-line="17">APlumPoleProtectVolume</a>）
+            </h2>
+            <p class="text-sm text-[var(--muted-foreground)] mt-1">
+              梅花桩不只是圆柱体静态网格：它同时承担 <strong>碰撞通道配合、精准落点锚定（<a class="code-link" href="../Source/ZeroAnim/PlumPoleActor.h#L94" data-rel="Source/ZeroAnim/PlumPoleActor.h" data-line="94">StandPoint</a>）、出口判定和占用锁</strong> 四项职责。
+            </p>
+          </div>
+
+          <!-- Interactive Pole Visualizer -->
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="font-semibold text-sm">交互式梅花桩剖面结构演示（调节参数观察碰撞盒、StandPoint 与出口分支）</div>
+              <div class="flex flex-wrap gap-1.5">
+                <button class="tab-pill px-2.5 py-1 rounded-md text-xs border cursor-pointer pole-mode-btn" data-mode="normal" data-active="true">普通梅花桩</button>
+                <button class="tab-pill px-2.5 py-1 rounded-md text-xs border cursor-pointer pole-mode-btn" data-mode="exit_low" data-active="false">出口桩 (平齐平台)</button>
+                <button class="tab-pill px-2.5 py-1 rounded-md text-xs border cursor-pointer pole-mode-btn" data-mode="exit_high" data-active="false">出口桩 (高落差地面)</button>
+                <button class="tab-pill px-2.5 py-1 rounded-md text-xs border cursor-pointer pole-mode-btn" data-mode="protect" data-active="false">叠加防跳落保护区</button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-center">
+              <div class="lg:col-span-2">
+                <canvas id="poleCanvas" class="w-full rounded-lg border border-[var(--border)]" style="height: 270px;"></canvas>
+              </div>
+              <div class="space-y-3 text-xs">
+                <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)] space-y-2.5">
+                  <div>
+                    <div class="flex justify-between mb-1">
+                      <span class="text-[var(--muted-foreground)]">桩高 Height (cm)</span>
+                      <span id="poleHeightVal" class="font-mono font-semibold">145 cm</span>
+                    </div>
+                    <input id="poleHeightSlider" type="range" min="60" max="280" value="145" class="w-full accent-[var(--primary)]" />
+                  </div>
+                  <div>
+                    <div class="flex justify-between mb-1">
+                      <span class="text-[var(--muted-foreground)]">半径 Radius (cm)</span>
+                      <span id="poleRadiusVal" class="font-mono font-semibold">34 cm</span>
+                    </div>
+                    <input id="poleRadiusSlider" type="range" min="20" max="60" value="34" class="w-full accent-[var(--primary)]" />
+                  </div>
+                  <label class="flex items-center gap-2 cursor-pointer pt-1">
+                    <input id="poleFlyingToggle" type="checkbox" class="accent-[var(--primary)]" />
+                    <span>模拟角色处于 <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1988" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1988">EnterMoveModeWindow</a> 腾空窗口</span>
+                  </label>
+                </div>
+
+                <div id="poleInfoCard" class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)] space-y-1.5 leading-relaxed"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-2">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="font-semibold text-sm">APlumPoleActor 关键构造逻辑</div>
+                <div class="flex gap-1.5">
+                  <a class="file-pill" href="../Source/ZeroAnim/PlumPoleActor.h#L12" data-rel="Source/ZeroAnim/PlumPoleActor.h" data-line="12">PlumPoleActor.h</a>
+                  <a class="file-pill" href="../Source/ZeroAnim/PlumPoleActor.cpp#L80" data-rel="Source/ZeroAnim/PlumPoleActor.cpp" data-line="80">PlumPoleActor.cpp</a>
+                </div>
+              </div>
+              <pre class="code-block rounded-lg p-3 text-xs font-mono"><code>// 1. 碰撞必须为 BlockAllDynamic (ECC_WorldDynamic) — L23 / L122
+Collision->SetCollisionProfileName(TEXT("BlockAllDynamic"));
+Collision->SetBoxExtent(FVector(Radius * 0.72f, Radius * 0.72f, Height * 0.5f));
+Collision->SetRelativeLocation(FVector(0, 0, Height * 0.5f));
+
+// 2. StandPoint 位于桩顶 (普通桩 Z=Height；出口桩 Z=+0.1268cm) — L87 / L143
+StandPoint->ComponentTags.AddUnique(TEXT("WarpTarget"));
+StandPoint->SetRelativeLocation(FVector(0, 0, bIsExitPole ? 0.1268f : Height));
+
+// 3. 事务性占用锁 — L177 / L187
+bool TryReserve(AActor* Traverser);
+void Release(AActor* Traverser);</code></pre>
+              <div class="flex flex-wrap gap-1.5 text-xs pt-1">
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleActor.cpp#L23" data-rel="Source/ZeroAnim/PlumPoleActor.cpp" data-line="23">BlockAllDynamic</a>
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleActor.cpp#L87" data-rel="Source/ZeroAnim/PlumPoleActor.cpp" data-line="87">ExitPole配置</a>
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleActor.cpp#L157" data-rel="Source/ZeroAnim/PlumPoleActor.cpp" data-line="157">GetLandingLocation</a>
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleActor.cpp#L177" data-rel="Source/ZeroAnim/PlumPoleActor.cpp" data-line="177">TryReserve</a>
+              </div>
+            </div>
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-2">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="font-semibold text-sm">APlumPoleProtectVolume 防跳落保护区</div>
+                <div class="flex gap-1.5">
+                  <a class="file-pill" href="../Source/ZeroAnim/PlumPoleProtectVolume.h#L17" data-rel="Source/ZeroAnim/PlumPoleProtectVolume.h" data-line="17">PlumPoleProtectVolume.h</a>
+                  <a class="file-pill" href="../Source/ZeroAnim/PlumPoleProtectVolume.cpp#L10" data-rel="Source/ZeroAnim/PlumPoleProtectVolume.cpp" data-line="10">PlumPoleProtectVolume.cpp</a>
+                </div>
+              </div>
+              <pre class="code-block rounded-lg p-3 text-xs font-mono"><code>// 仅过滤角色主胶囊体，避免子碰撞误触发 — PlumPoleProtectVolume.cpp:10
+bool IsPrimaryCharacterCapsule(AActor* Other, UPrimitiveComponent* Comp) {
+    if (auto* Char = Cast&lt;ACharacter&gt;(Other))
+        return Comp == Char->GetCapsuleComponent();
+    return false;
+}
+
+// Overlap 进入/离开时，用 TSet 引用计数增减保护状态 — L100 / L116
+Traversal->AddJumpOutProtectOverlap(this);    // 禁止按 Jump 跳下
+Traversal->RemoveJumpOutProtectOverlap(this); // 离开所有保护区才解锁</code></pre>
+              <div class="flex flex-wrap gap-1.5 text-xs pt-1">
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleProtectVolume.cpp#L80" data-rel="Source/ZeroAnim/PlumPoleProtectVolume.cpp" data-line="80">OnBoundsBeginOverlap</a>
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleProtectVolume.cpp#L100" data-rel="Source/ZeroAnim/PlumPoleProtectVolume.cpp" data-line="100">RegisterActorOverlap</a>
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L559" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="559">AddJumpOutProtectOverlap</a>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- STEP 3 -->
+        <section class="step-panel space-y-5 hidden" data-step="3">
+          <div>
+            <div class="badge-chip mb-2">Step 4 / 8 · 选桩算法与左右脚状态机</div>
+            <h2 class="text-xl font-bold">核心组件 Part 1：90° 扇形选桩、近跳/远翻回退与左右脚交替</h2>
+            <p class="text-sm text-[var(--muted-foreground)] mt-1">
+              <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.h#L105" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.h" data-line="105">UPlumPoleTraversalComponent</a> 的所有动作入口都围绕同一套 <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L371" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="371">SelectPoleActor</a> 几何筛选器展开，并靠 <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L579" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="579">LeftOrRight</a> 自动交替出脚。
+            </p>
+          </div>
+
+          <!-- Interactive Top-Down Targeting Arena -->
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="font-semibold text-sm">交互式俯视选桩模拟器（移动鼠标/拖动角度瞄准，点击画布或按钮实战体验状态流转）</div>
+              <div class="flex flex-wrap gap-1.5">
+                <button id="simActionMove" class="px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer" style="background: var(--primary); color: var(--primary-foreground);">执行 OnMove / 上桩</button>
+                <button id="simActionDash" class="px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--border)] bg-[var(--content)] hover:bg-[var(--accent)] cursor-pointer">执行 OnDash (Shift)</button>
+                <button id="simActionJumpOff" class="px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--border)] bg-[var(--content)] hover:bg-[var(--accent)] cursor-pointer">按 Jump 主动下桩</button>
+                <button id="simReset" class="px-2.5 py-1.5 rounded-md text-xs border border-[var(--border)] bg-[var(--content)] hover:bg-[var(--accent)] cursor-pointer">重置回地面</button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <div class="lg:col-span-2">
+                <canvas id="arenaCanvas" class="w-full rounded-lg border border-[var(--border)] cursor-crosshair" style="height: 340px;"></canvas>
+              </div>
+              <div class="space-y-3 text-xs">
+                <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)] space-y-2">
+                  <div class="font-semibold text-sm">实时状态机监视器</div>
+                  <div class="grid grid-cols-2 gap-1.5 font-mono">
+                    <div class="text-[var(--muted-foreground)]">TraversalState:</div>
+                    <div id="simState" class="font-semibold">Grounded</div>
+                    <div class="text-[var(--muted-foreground)]">ActiveTimeline:</div>
+                    <div id="simTimeline" class="font-semibold">None</div>
+                    <div class="text-[var(--muted-foreground)]">支撑脚 (LeftOrRight):</div>
+                    <div id="simFoot" class="font-semibold">-</div>
+                    <div class="text-[var(--muted-foreground)]">当前所在桩:</div>
+                    <div id="simCurPole" class="font-semibold">地面</div>
+                    <div class="text-[var(--muted-foreground)]">锁定目标桩:</div>
+                    <div id="simTargetPole" class="font-semibold">无</div>
+                    <div class="text-[var(--muted-foreground)]">预计触发动作:</div>
+                    <div id="simPredicted" class="font-semibold" style="color: var(--primary);">-</div>
+                  </div>
+                  <div id="simCodeJump" class="pt-2 border-t border-[var(--border)] flex flex-wrap gap-1.5"></div>
+                </div>
+
+                <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)] space-y-1.5">
+                  <div class="flex justify-between">
+                    <span class="text-[var(--muted-foreground)]">输入方向角度（或直接移动画布鼠标）</span>
+                    <span id="simAngleVal" class="font-mono">0°</span>
+                  </div>
+                  <input id="simAngleSlider" type="range" min="-180" max="180" value="0" class="w-full accent-[var(--primary)]" />
+                </div>
+
+                <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)] space-y-1 text-[var(--muted-foreground)]">
+                  <div class="font-semibold text-[var(--foreground)]">图例与参数源码</div>
+                  <div class="flex items-center gap-2"><span class="pin-dot" style="background: var(--chart-2);"></span> 蓝色圆：普通梅花桩 (H=145cm)</div>
+                  <div class="flex items-center gap-2"><span class="pin-dot" style="background: var(--success);"></span> 绿色菱形：平齐出口桩 (|ΔZ|&lt;<a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.h#L305" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.h" data-line="305">200</a>)</div>
+                  <div class="flex items-center gap-2"><span class="pin-dot" style="background: var(--warning);"></span> 橙色菱形：高落差出口桩 (|ΔZ|≥200)</div>
+                  <div class="pt-1">
+                    内圈=<a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.h#L294" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.h" data-line="294">350cm</a> ·
+                    外圈=<a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.h#L297" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.h" data-line="297">500cm</a> ·
+                    锥角=<a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.h#L301" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.h" data-line="301">90°</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Rules Summary -->
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-2">
+              <div class="font-semibold text-sm">规则 1：三类选桩策略</div>
+              <ul class="space-y-1.5 text-[var(--muted-foreground)] list-disc pl-4 leading-relaxed">
+                <li><strong>地面上桩</strong> (<a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L792" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="792">FindEnterablePole</a>)：<code>500cm</code>、90° 锥、<strong>不含</strong>出口桩、取<strong>最近</strong>。</li>
+                <li><strong>桩上近跳</strong> (<a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L944" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="944">OnMove</a>)：<code>350cm</code>、含出口桩、取<strong>最近</strong>；无目标则在 <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L982" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="982">PlumPoleTraversalComponent.cpp</a> 自动<strong>回退 OnDash</strong>！</li>
+                <li><strong>桩上远翻</strong> (<a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L985" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="985">OnDash</a>)：<code>500cm</code>、含出口桩、取<strong>最远</strong>；<code>Act</code> 阶段写入 <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L998" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="998">bBufferedDash</a> 缓冲。</li>
+              </ul>
+            </div>
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-2">
+              <div class="flex items-center justify-between">
+                <div class="font-semibold text-sm">规则 2：左右脚交替公式</div>
+                <a class="file-pill" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L579" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="579">PlumPoleTraversalComponent.cpp</a>
+              </div>
+              <pre class="code-block rounded-lg p-2.5 font-mono"><code>bool LeftOrRight() const {
+  return ActiveTimeline == Idle_L
+      || ActiveTimeline == Jump_R
+      || ActiveTimeline == Dash;
+}</code></pre>
+              <p class="text-[var(--muted-foreground)] leading-relaxed">
+                在 <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L976" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="976">OnMove</a> 和出口分支 <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1172" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1172">MoveToPole</a> 中被调用。连跳时在 <code>Combo</code> 阶段立即接下一跳，起播点跳过前摇（<code>0.32s</code> / <code>0.20s</code>）。
+              </p>
+            </div>
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-2">
+              <div class="flex items-center justify-between">
+                <div class="font-semibold text-sm">规则 3：动作阶段门禁</div>
+                <a class="file-pill" href="../Source/ZeroAnim/PlumPoleTraversalComponent.h#L49" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.h" data-line="49">PlumPoleTraversalComponent.h</a>
+              </div>
+              <ul class="space-y-1.5 text-[var(--muted-foreground)] list-disc pl-4 leading-relaxed">
+                <li><a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L600" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="600">HasPreJumpTag</a>：近跳蓄力期（0.194~0.500s），可被 <code>OnDash</code> 立刻打断改跳远桩。</li>
+                <li><a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L610" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="610">CanMove</a> / <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L622" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="622">CanDash</a>：控制 <code>Idle / Combo / Cancel</code> 阶段的可操作性。</li>
+                <li><a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1593" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1593">CancelByMove</a>：下桩落地后推摇杆立刻提前结束能力，丝滑切回地面跑动。</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- STEP 4 -->
+        <section class="step-panel space-y-5 hidden" data-step="4">
+          <div>
+            <div class="badge-chip mb-2">Step 5 / 8 · 变速时间轴与 SkewWarp</div>
+            <h2 class="text-xl font-bold">核心组件 Part 2：FRichCurve 速率曲线、子步切分与两阶段 SkewWarp</h2>
+            <p class="text-sm text-[var(--muted-foreground)] mt-1">
+              为什么跳桩手感这么利落、且不同桩距都能分毫不差地踩在桩心？核心全在 <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1323" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1323">AdvanceActiveTimeline</a>（RK2 变速积分 + <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1413" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1413">ConsiderEvent</a> 子步切分）和 <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1674" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1674">ApplySkewWarpMotion</a>！
+            </p>
+          </div>
+
+          <!-- Interactive Timeline & SkewWarp Lab -->
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="font-semibold text-sm">交互式时间轴 & SkewWarp 实验室（切换时间轴并拖动进度条/播放）</div>
+              <div class="flex flex-wrap gap-1.5">
+                <button class="tab-pill px-2.5 py-1 rounded-md text-xs border cursor-pointer tl-btn" data-tl="Dash" data-active="true">Dash (上桩/远翻)</button>
+                <button class="tab-pill px-2.5 py-1 rounded-md text-xs border cursor-pointer tl-btn" data-tl="Jump_L" data-active="false">Jump_L (近跳)</button>
+                <button class="tab-pill px-2.5 py-1 rounded-md text-xs border cursor-pointer tl-btn" data-tl="JumpToPlatform_L" data-active="false">JumpToPlatform (平齐下桩)</button>
+                <button class="tab-pill px-2.5 py-1 rounded-md text-xs border cursor-pointer tl-btn" data-tl="JumpOff" data-active="false">JumpOff (主动跳落)</button>
+              </div>
+            </div>
+
+            <!-- Scrubber controls + Dynamic source links for selected timeline -->
+            <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)] space-y-2 text-xs">
+              <div class="flex flex-wrap items-center gap-3">
+                <button id="tlPlayBtn" class="px-3 py-1 rounded-md font-medium cursor-pointer" style="background: var(--primary); color: var(--primary-foreground);">▶ 播放</button>
+                <div class="flex-1 min-w-[200px] flex items-center gap-2">
+                  <span class="text-[var(--muted-foreground)] shrink-0">动画源时间</span>
+                  <input id="tlScrub" type="range" min="0" max="1.967" step="0.005" value="0.65" class="w-full accent-[var(--primary)]" />
+                  <span id="tlTimeReadout" class="font-mono tabular-nums w-20 text-right">0.650 s</span>
+                </div>
+                <div class="flex items-center gap-3 font-mono">
+                  <span>速率: <strong id="tlRateReadout" style="color: var(--primary);">1.31x</strong></span>
+                  <span>阶段: <strong id="tlPhaseReadout">Act</strong></span>
+                  <span>CMC: <strong id="tlCmcReadout">MOVE_Flying</strong></span>
+                </div>
+              </div>
+              <div id="tlSourceLinks" class="flex flex-wrap items-center gap-2 pt-2 border-t border-[var(--border)]"></div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div class="space-y-1.5">
+                <div class="text-xs font-semibold text-[var(--muted-foreground)]">Rate 变速曲线 & 关键事件窗口轨道（实时高亮）</div>
+                <canvas id="timelineCanvas" class="w-full rounded-lg border border-[var(--border)]" style="height: 280px;"></canvas>
+              </div>
+              <div class="space-y-2">
+                <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span class="font-semibold text-[var(--muted-foreground)]">SkewWarp 轨迹对比（灰虚线=原始 RootMotion · 实线=扭曲后）</span>
+                </div>
+                <canvas id="warpCanvas" class="w-full rounded-lg border border-[var(--border)]" style="height: 228px;"></canvas>
+                <div class="grid grid-cols-2 gap-3 text-xs px-1">
+                  <div>
+                    <div class="flex justify-between"><span class="text-[var(--muted-foreground)]">目标水平距离</span><span id="warpDistVal" class="font-mono">380 cm</span></div>
+                    <input id="warpDistSlider" type="range" min="160" max="500" value="380" class="w-full accent-[var(--primary)]" />
+                  </div>
+                  <div>
+                    <div class="flex justify-between"><span class="text-[var(--muted-foreground)]">目标高度差 ΔZ</span><span id="warpDzVal" class="font-mono">+80 cm</span></div>
+                    <input id="warpDzSlider" type="range" min="-160" max="160" value="80" class="w-full accent-[var(--primary)]" />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SkewWarp Math & CMC Scopes -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-2">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="font-semibold text-sm">SkewWarp 精准落桩公式（不漂移、不月步）</div>
+                <a class="file-pill" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1674" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1674">📄 PlumPoleTraversalComponent.cpp</a>
+              </div>
+              <pre class="code-block rounded-lg p-3 font-mono"><code>// 1. 减去 Stage2 之后的剩余 RootMotion — L1744
+WarpEndTarget = FinalActorTarget - TargetQuat.Rotate(RemainingRM);
+
+// 2. XY 分解：沿主轴比例缩放，100% 保留原始横向弧线 — L1787
+ForwardProgress = Dot(CurXY, TotalXY) / TotalXY.SizeSquared();
+LateralCurveXY  = CurXY - TotalXY * ForwardProgress;
+DesiredXY = StartXY + TargetXY * ForwardProgress + LateralCurveXY;
+
+// 3. Z 轴：保留原始起跳抛物线 + 用缓动曲线吸收高度差 ResidualZ — L1798
+DesiredZ = StartZ + AnimRMNow.Z + (TargetDelta.Z - TotalRM.Z) * EaseAlpha;
+
+// 4. 通过 SafeMoveUpdatedComponent 扫掠移动（带贴墙滑动）— L1806
+CMC->SafeMoveUpdatedComponent(DesiredLoc - ActorLoc, Rot, true, Hit);</code></pre>
+              <div class="flex flex-wrap gap-1.5 pt-1">
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1682" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1682">Stage1纯转向</a>
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1708" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1708">Stage2位移+转向</a>
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1787" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1787">XY分解</a>
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1845" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1845">ApplyJumpOffMotion</a>
+              </div>
+            </div>
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-2">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="font-semibold text-sm">三层 CMC 作用域封装（退出必无损恢复）</div>
+                <a class="file-pill" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1939" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1939">📄 PlumPoleTraversalComponent.cpp</a>
+              </div>
+              <ul class="space-y-2 text-[var(--muted-foreground)] list-disc pl-4 leading-relaxed">
+                <li>
+                  <strong class="text-[var(--foreground)]">PoleCmcScope（上桩全程）</strong>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1939" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1939">Enter</a> /
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1969" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1969">Exit</a>：
+                  保存并置零 <code>MaxWalkSpeed=0</code>、<code>MaxAcceleration=0</code>、<code>bOrientRotationToMovement=false</code>，退出时无损恢复。
+                </li>
+                <li>
+                  <strong class="text-[var(--foreground)]">MoveModeWindow（腾空窗）</strong>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1988" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1988">Enter</a> /
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L2005" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="2005">Exit</a>：
+                  切 <code>MOVE_Flying</code> + 胶囊体设 <code>Ignore ECC_WorldDynamic</code> 掠过桩沿；到窗尾立刻恢复碰撞并切 <code>MOVE_Falling</code>。
+                </li>
+                <li>
+                  <strong class="text-[var(--foreground)]">GravityScaleWindow（仅 JumpOff）</strong>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L2020" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="2020">Enter</a> /
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L2031" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="2031">Exit</a>：
+                  在 <code>0.306s~1.045s</code> 设 <code>GravityScale = 0.5</code>，同时在 <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1850" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1850">RM_Input</a> 窗内以 <code>720°/s</code> 调整落地朝向。
+                </li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- STEP 5 -->
+        <section class="step-panel space-y-5 hidden" data-step="5">
+          <div>
+            <div class="badge-chip mb-2">Step 6 / 8 · 改造角色蓝图</div>
+            <h2 class="text-xl font-bold">修改角色蓝图：从 BP_ThirdPersonCharacter 到 BP_SoulThirdPerson</h2>
+            <p class="text-sm text-[var(--muted-foreground)] mt-1">
+              这是在第三人称模板上最直观的一步。核心秘诀：<strong>不删模板 EventGraph，只改父类为 <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L64" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="64">APlumPoleCharacter</a> + 配置 Details 面板</strong>。
+            </p>
+          </div>
+
+          <!-- Interactive Input Router & BP Diff -->
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="font-semibold text-sm">交互式输入路由演示：点击按键，对照跳转 C++ 实际调用链</div>
+              <div class="flex items-center gap-2 text-xs">
+                <span class="text-[var(--muted-foreground)]">当前角色状态：</span>
+                <button class="tab-pill px-2.5 py-1 rounded-md border cursor-pointer input-ctx-btn" data-ctx="ground_far" data-active="true">地面 (远离桩)</button>
+                <button class="tab-pill px-2.5 py-1 rounded-md border cursor-pointer input-ctx-btn" data-ctx="ground_near" data-active="false">地面 (500cm 有桩)</button>
+                <button class="tab-pill px-2.5 py-1 rounded-md border cursor-pointer input-ctx-btn" data-ctx="on_pole" data-active="false">站在梅花桩上</button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <button class="p-3 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:bg-[var(--accent)] text-left cursor-pointer key-sim-btn" data-key="jump">
+                <div class="flex items-center justify-between">
+                  <span class="font-bold text-sm">按下 Space (IA_Jump)</span>
+                  <span class="badge-chip font-mono">BP → C++ override</span>
+                </div>
+                <div class="text-xs text-[var(--muted-foreground)] mt-1">模板蓝图调用 <code>Jump()</code></div>
+              </button>
+              <button class="p-3 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:bg-[var(--accent)] text-left cursor-pointer key-sim-btn" data-key="move">
+                <div class="flex items-center justify-between">
+                  <span class="font-bold text-sm">推动 WASD (IA_Move)</span>
+                  <span class="badge-chip font-mono">BP + C++ 双监听</span>
+                </div>
+                <div class="text-xs text-[var(--muted-foreground)] mt-1">模板走 <code>AddMovementInput</code>，C++ 同时走 <code>OnMove2D</code></div>
+              </button>
+              <button class="p-3 rounded-lg border border-[var(--border)] bg-[var(--content)] hover:bg-[var(--accent)] text-left cursor-pointer key-sim-btn" data-key="flip">
+                <div class="flex items-center justify-between">
+                  <span class="font-bold text-sm">按下 Shift (IA_PoleFlip)</span>
+                  <span class="badge-chip font-mono">C++ IMC_PlumPole</span>
+                </div>
+                <div class="text-xs text-[var(--muted-foreground)] mt-1">C++ 绑定 <code>HandlePoleFlipInput()</code></div>
+              </button>
+            </div>
+
+            <div id="inputRouteOutput" class="p-4 rounded-lg bg-[var(--content)] border border-[var(--border)] text-xs space-y-2 leading-relaxed"></div>
+          </div>
+
+          <!-- Step-by-step BP Editor Operations -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 text-xs">
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-3">
+              <div class="font-semibold text-sm">编辑器逐项操作步骤（对比原版 BP_ThirdPersonCharacter）</div>
+              <ol class="space-y-2.5 list-decimal pl-4 text-[var(--muted-foreground)] leading-relaxed">
+                <li><strong class="text-[var(--foreground)]">复制资产</strong>：复制 <code>/Game/ThirdPerson/Blueprints/BP_ThirdPersonCharacter</code> 到 <code>/Game/PlumPole/BP_SoulThirdPerson</code>。</li>
+                <li><strong class="text-[var(--foreground)]">修改父类（核心）</strong>：打开蓝图 → <strong>Class Settings → Parent Class</strong> 从 <code>Character</code> 改为 <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L64" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="64">PlumPoleCharacter</a> → 编译。</li>
+                <li><strong class="text-[var(--foreground)]">确认继承组件</strong>：左侧 Components 树自动多出 <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L164" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="164">PlumPoleTraversal</a> 和 <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L167" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="167">InteractPromptComponent</a>（构造见 <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L48" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="48">PlumPoleCharacter.cpp</a>）；原模板的 <code>CameraBoom</code> 与 <code>FollowCamera</code> 完好无损。</li>
+                <li><strong class="text-[var(--foreground)]">替换网格与动画类</strong>：选中 <code>Mesh</code>，把骨骼网格设为 <code>SKM_Manny_Simple</code>，<code>Anim Class</code> 设为 <code>ABP_PlumPoleManny_C</code>。</li>
+                <li><strong class="text-[var(--foreground)]">绑定输入与 UI（Class Defaults）</strong>：
+                  <ul class="list-disc pl-4 mt-1 space-y-1">
+                    <li><a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L130" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="130">PoleInputMappingContext</a> = <code>IMC_PlumPole</code></li>
+                    <li><a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L133" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="133">PoleFlipInputAction</a> = <code>IA_PoleFlip</code></li>
+                    <li><a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L137" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="137">PoleMoveInputAction</a> = <code>IA_Move</code>（<a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L65" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="65">PlumPoleCharacter.cpp</a> 已默认找好）</li>
+                    <li><a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L170" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="170">InteractPromptWidgetClass</a> = <code>WBP_PlumPoleInteractPrompt</code></li>
+                  </ul>
+                </li>
+                <li><strong class="text-[var(--foreground)]">相机平滑（推荐）</strong>：选中 <code>CameraBoom</code> 勾选 <code>Enable Camera Lag</code> 和 <code>Enable Camera Rotation Lag</code>；无需改动默认臂长，上桩时 <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L429" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="429">UpdatePlumPoleCamera</a> 会自动增量平滑叠加 <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L208" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="208">+300cm</a> 与 <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L212" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="212">(0,+100,0)</a>！</li>
+              </ol>
+            </div>
+
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-3">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="font-semibold text-sm">C++ 父类在幕后替你做的 4 件关键大事</div>
+                <a class="file-pill" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L218" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="218">📄 PlumPoleCharacter.cpp</a>
+              </div>
+              <pre class="code-block rounded-lg p-3 font-mono"><code>// 1. 强制 Tick 顺序：先算跳桩位置与源时间，再刷新骨骼 — L222
+GetMesh()->AddTickPrerequisiteComponent(PlumPoleTraversal);
+
+// 2. 监听时间轴切换，转发给 UPlumPoleAnimInstance — L223 / L724
+PlumPoleTraversal->OnTimelineChanged.AddDynamic(this, &ThisClass::OnTimelineChanged);
+
+// 3. 拦截 Jump()：有桩上桩/在桩跳下，没桩才走模板默认跳跃 — L701
+void APlumPoleCharacter::Jump() {
+    if (!PlumPoleTraversal->TryTraverse()) Super::Jump();
+}
+
+// 4. 相机 0.5s 增量平滑偏移（不破坏模板原有地面臂长）— L474
+CachedCameraBoom->TargetArmLength += (NextAdditiveArm - AppliedAdditiveArmLength);
+CachedCameraBoom->SocketOffset    += (NextAdditiveSocket - AppliedAdditiveSocketOffset);</code></pre>
+              <div class="flex flex-wrap gap-1.5">
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L222" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="222">Tick顺序</a>
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L724" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="724">OnTimelineChanged</a>
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L701" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="701">Jump重写</a>
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L406" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="406">OnCameraAdditiveChanged</a>
+              </div>
+
+              <div class="p-3 rounded-lg border text-xs leading-relaxed" style="border-color: var(--warning); background: var(--content);">
+                <strong style="color: var(--warning);">避坑说明（看现有项目蓝图时别困惑）</strong><br/>
+                打开项目里的 <code>BP_SoulThirdPerson</code>，你会看到旧版遗留的
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L119" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="119">SelectPoleAnimation</a> /
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L115" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="115">ScorePoleCandidate</a> /
+                <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L111" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="111">SelectPoleInputResponse</a> 覆盖函数。
+                当前 PBZ 1:1 管线实际调用的是 <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.h#L107" data-rel="Source/ZeroAnim/PlumPoleCharacter.h" data-line="107">ChooseTimelinePlayback</a>，上述旧函数<strong>不再被调用</strong>，从零搭建时无需重写它们！
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- STEP 6 -->
+        <section class="step-panel space-y-5 hidden" data-step="6">
+          <div>
+            <div class="badge-chip mb-2">Step 7 / 8 · 改造动画蓝图</div>
+            <h2 class="text-xl font-bold">修改动画蓝图（ABP_PlumPoleManny）与底层 AnimInstanceProxy 多层混合</h2>
+            <p class="text-sm text-[var(--muted-foreground)] mt-1">
+              这是整个方案最优雅的地方：<strong>AnimGraph 里不用画任何跳桩状态机或 Slot</strong>，只需要 Reparent 为 <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.h#L22" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.h" data-line="22">UPlumPoleAnimInstance</a> 后，在原有的 <code>CR_Mannequin_FootIK</code> 上接两根线！
+            </p>
+          </div>
+
+          <!-- AnimGraph Node Schematic -->
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="font-semibold text-sm">1. 编辑器操作：在第三人称模板 <code>ABP_Unarmed</code> 上做的唯一修改</div>
+              <div class="flex gap-1.5">
+                <a class="file-pill" href="../Source/ZeroAnim/PlumPoleAnimInstance.h#L22" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.h" data-line="22">📄 PlumPoleAnimInstance.h</a>
+                <a class="file-pill" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L513" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="513">📄 PlumPoleAnimInstance.cpp</a>
+              </div>
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-center">
+              <ol class="text-xs space-y-2 list-decimal pl-4 text-[var(--muted-foreground)] leading-relaxed">
+                <li>复制 <code>/Game/Characters/Mannequins/Anims/Unarmed/ABP_Unarmed</code> 为 <code>/Game/PlumPole/ABP_PlumPoleManny</code>。</li>
+                <li><strong>Class Settings → Parent Class</strong> 改为 <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.h#L22" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.h" data-line="22">PlumPoleAnimInstance</a> → 编译。</li>
+                <li>打开 <strong>AnimGraph</strong>，找到末尾的 <code>Control Rig (CR_Mannequin_FootIK)</code> 节点：
+                  <ul class="list-disc pl-4 mt-1 space-y-1">
+                    <li>把变量 <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.h#L33" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.h" data-line="33">LegIKAlpha</a>（地面 <code>1.0</code>，桩上 <code>0.0</code>）连到 Control Rig 的 <strong>Alpha</strong> 引脚。</li>
+                    <li>把变量 <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.h#L29" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.h" data-line="29">bDisableLegIK</a> 经 <code>NOT Boolean</code> 取反后，连到 Control Rig 的 <strong>ShouldDoIKTrace</strong> 引脚。</li>
+                  </ul>
+                </li>
+                <li>保存编译！原版 Locomotion、Jump/Fall 状态机、BlendSpace <strong>一行不动</strong>。</li>
+              </ol>
+
+              <!-- Blueprint Node Mockup -->
+              <div class="p-4 rounded-lg bg-[var(--content)] border border-[var(--border)] text-xs font-mono space-y-3">
+                <div class="text-[var(--muted-foreground)] font-sans font-semibold">AnimGraph 末尾节点连线示意：</div>
+                <div class="flex flex-wrap items-center gap-3 justify-between">
+                  <div class="space-y-2">
+                    <div class="px-2.5 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] flex items-center gap-2">
+                      <span class="pin-dot" style="background: var(--success);"></span>
+                      <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.h#L33" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.h" data-line="33">Get LegIKAlpha</a>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                      <div class="px-2.5 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] flex items-center gap-2">
+                        <span class="pin-dot" style="background: var(--error);"></span>
+                        <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.h#L29" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.h" data-line="29">Get bDisableLegIK</a>
+                      </div>
+                      <span>→</span>
+                      <div class="px-2 py-1 rounded border border-[var(--border)] bg-[var(--card)]">NOT</div>
+                    </div>
+                  </div>
+
+                  <div class="text-lg text-[var(--muted-foreground)]">⇒</div>
+
+                  <div class="p-3 rounded-lg border-2 bg-[var(--card)] space-y-1.5 min-w-[210px]" style="border-color: var(--primary);">
+                    <div class="font-bold text-[var(--foreground)] pb-1 border-b border-[var(--border)]">Control Rig · CR_Mannequin_FootIK</div>
+                    <div class="flex items-center gap-2"><span class="pin-dot" style="background: var(--chart-1);"></span> Source ← Main States (原模板)</div>
+                    <div class="flex items-center gap-2"><span class="pin-dot" style="background: var(--success);"></span> <strong>Alpha</strong> ← LegIKAlpha</div>
+                    <div class="flex items-center gap-2"><span class="pin-dot" style="background: var(--error);"></span> <strong>ShouldDoIKTrace</strong> ← NOT bDisableLegIK</div>
+                  </div>
+                </div>
+                <div class="text-[var(--muted-foreground)] font-sans pt-1 border-t border-[var(--border)] leading-relaxed">
+                  ※ 上述 AnimGraph 输出即为 <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L455" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="455">EvaluateBasePose</a>；在 C++ <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L352" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="352">FPlumPoleAnimInstanceProxy::Evaluate_WithRoot</a> 中会直接多层混合跳桩姿势并覆写最终 Pose！
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Interactive Proxy Layer Blender Simulator -->
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="font-semibold text-sm">2. 交互式 AnimInstanceProxy 多层融合演示（连续点击按钮模拟打断与自然淡出）</div>
+              <div class="flex flex-wrap gap-1.5 text-xs">
+                <button class="px-2.5 py-1 rounded-md border border-[var(--border)] bg-[var(--content)] hover:bg-[var(--accent)] cursor-pointer proxy-btn" data-clip="Dash">① 上桩 Dash (0.25s)</button>
+                <button class="px-2.5 py-1 rounded-md border border-[var(--border)] bg-[var(--content)] hover:bg-[var(--accent)] cursor-pointer proxy-btn" data-clip="Idle_L">② 待机 Idle_L (0.50s)</button>
+                <button class="px-2.5 py-1 rounded-md border border-[var(--border)] bg-[var(--content)] hover:bg-[var(--accent)] cursor-pointer proxy-btn" data-clip="Jump_L">③ 近跳 Jump_L (0.15s)</button>
+                <button class="px-2.5 py-1 rounded-md border border-[var(--border)] bg-[var(--content)] hover:bg-[var(--accent)] cursor-pointer proxy-btn" data-clip="Jump_R">④ 连跳打断 Jump_R (0.15s)</button>
+                <button class="px-2.5 py-1 rounded-md border border-[var(--border)] bg-[var(--content)] hover:bg-[var(--accent)] cursor-pointer proxy-btn" data-clip="JumpToPlatform_L">⑤ 下桩 Platform (0.15s)</button>
+                <button class="px-2.5 py-1 rounded-md cursor-pointer proxy-btn" style="background: var(--primary); color: var(--primary-foreground);" data-clip="None">⑥ 回地面 Ground (0.30s)</button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+              <div class="lg:col-span-2 space-y-2">
+                <canvas id="proxyCanvas" class="w-full rounded-lg border border-[var(--border)]" style="height: 230px;"></canvas>
+                <div class="flex flex-wrap gap-1.5 text-xs">
+                  <span class="text-[var(--muted-foreground)]">Proxy 核心源码直跳：</span>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L15" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="15">MaxOutgoingLayers=6</a>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L127" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="127">FClipLayer::Sample</a>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L171" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="171">SetTimelineClip</a>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L324" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="324">PreUpdate</a>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L352" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="352">Evaluate_WithRoot</a>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L396" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="396">BlendTwoPoses</a>
+                  <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L536" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="536">CreateAnimInstanceProxy</a>
+                </div>
+              </div>
+              <div class="space-y-2.5 text-xs">
+                <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)] space-y-1.5 font-mono">
+                  <div class="font-sans font-semibold text-sm text-[var(--foreground)]">Proxy 运行态</div>
+                  <div class="flex justify-between"><span class="text-[var(--muted-foreground)]">Current 层:</span><strong id="proxyCur">Ground (BasePose)</strong></div>
+                  <div class="flex justify-between"><span class="text-[var(--muted-foreground)]">Outgoing 队列数:</span><strong id="proxyOutCount">0 / 6</strong></div>
+                  <div class="flex justify-between"><span class="text-[var(--muted-foreground)]">bDisableLegIK:</span><strong id="proxyDisableIK">false</strong></div>
+                  <div class="flex justify-between"><span class="text-[var(--muted-foreground)]">LegIKAlpha:</span><strong id="proxyIKAlpha" style="color: var(--success);">1.00</strong></div>
+                </div>
+                <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)] text-[var(--muted-foreground)] leading-relaxed">
+                  <strong class="text-[var(--foreground)]">为什么最多保留 6 层 Outgoing？</strong><br/>
+                  玩家高速连跳（如 <code>Jump_L → Jump_R → Dash</code>）时，上一动作还没淡出完就被打断。<a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L203" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="203">SetTimelineClip</a> 把旧层推入 <code>Outgoing</code> 并按 <code>1.0x</code>（或自然淡出尾速）继续推进，与新层 <code>Current</code> 及地面 <code>BasePose</code> 实时加权混合，彻底消灭动作跳帧！
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- STEP 7 -->
+        <section class="step-panel space-y-5 hidden" data-step="7">
+          <div>
+            <div class="badge-chip mb-2">Step 8 / 8 · 串联上线与排错验收</div>
+            <h2 class="text-xl font-bold">配置 GameMode、交互提示 UI、测试关卡与验收清单</h2>
+            <p class="text-sm text-[var(--muted-foreground)] mt-1">
+              最后一步把 GameMode、UI 提示和关卡梅花桩连起来，点击 Play 即可完整跑通上桩、近跳、远翻、平齐落台、高空跳落与保护区拦截！
+            </p>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-2">
+              <div class="flex items-center justify-between">
+                <div class="font-semibold text-sm">1. 配置 BP_PlumPoleGameMode</div>
+                <a class="file-pill" href="../Config/DefaultEngine.ini#L7" data-rel="Config/DefaultEngine.ini" data-line="7">DefaultEngine.ini</a>
+              </div>
+              <ul class="space-y-1.5 text-[var(--muted-foreground)] list-disc pl-4 leading-relaxed">
+                <li>复制 <code>BP_ThirdPersonGameMode</code> 为 <code>BP_PlumPoleGameMode</code>。</li>
+                <li><code>Default Pawn Class</code> → <strong>BP_SoulThirdPerson</strong>。</li>
+                <li><code>Player Controller Class</code> → 保持 <strong>BP_ThirdPersonPlayerController</strong>（它负责加 <code>IMC_Default</code>）。</li>
+                <li>关卡 <strong>World Settings → GameMode Override</strong> 选 <code>BP_PlumPoleGameMode</code>；默认地图配置见 <a class="code-link" href="../Config/DefaultEngine.ini#L7" data-rel="Config/DefaultEngine.ini" data-line="7">DefaultEngine.ini</a>。</li>
+              </ul>
+            </div>
+
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-2">
+              <div class="flex items-center justify-between">
+                <div class="font-semibold text-sm">2. 搭建 WBP_PlumPoleInteractPrompt</div>
+                <a class="file-pill" href="../Source/ZeroAnim/PlumPoleInteractPromptWidget.cpp#L366" data-rel="Source/ZeroAnim/PlumPoleInteractPromptWidget.cpp" data-line="366">PlumPoleInteractPromptWidget.cpp</a>
+              </div>
+              <ul class="space-y-1.5 text-[var(--muted-foreground)] list-disc pl-4 leading-relaxed">
+                <li>新建空白 Widget Blueprint，<strong>Reparent → <a class="code-link" href="../Source/ZeroAnim/PlumPoleInteractPromptWidget.h#L42" data-rel="Source/ZeroAnim/PlumPoleInteractPromptWidget.h" data-line="42">UPlumPoleInteractPromptWidget</a></strong>。</li>
+                <li>无需拖控件！C++ <a class="code-link" href="../Source/ZeroAnim/PlumPoleInteractPromptWidget.cpp#L366" data-rel="Source/ZeroAnim/PlumPoleInteractPromptWidget.cpp" data-line="366">RebuildWidget</a> 自动构建 <code>[IconRing, KeyBadge, DirectionArrow]</code> 与全部 20 组 <a class="code-link" href="../Source/ZeroAnim/PlumPoleInteractPromptWidget.cpp#L120" data-rel="Source/ZeroAnim/PlumPoleInteractPromptWidget.cpp" data-line="120">GetTransitionSpec</a> 过渡曲线。</li>
+                <li>由 <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacterInput.cpp#L13" data-rel="Source/ZeroAnim/PlumPoleCharacterInput.cpp" data-line="13">FPlumPoleInputDeviceProcessor</a> 自动监听键鼠/手柄并热切换图标。</li>
+              </ul>
+            </div>
+
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-2">
+              <div class="flex items-center justify-between">
+                <div class="font-semibold text-sm">3. 摆放梅花桩与音效扩展</div>
+                <a class="file-pill" href="../Source/ZeroAnim/PlumPoleAudio.cpp#L71" data-rel="Source/ZeroAnim/PlumPoleAudio.cpp" data-line="71">PlumPoleAudio.cpp</a>
+              </div>
+              <ul class="space-y-1.5 text-[var(--muted-foreground)] list-disc pl-4 leading-relaxed">
+                <li>拖入 <a class="code-link" href="../Source/ZeroAnim/PlumPoleActor.h#L12" data-rel="Source/ZeroAnim/PlumPoleActor.h" data-line="12">APlumPoleActor</a>：相邻间距摆 <code>250~330cm</code> 测近跳，摆 <code>400~470cm</code> 测远翻。</li>
+                <li>平齐高台边缘放出口桩（勾 <a class="code-link" href="../Source/ZeroAnim/PlumPoleActor.h#L121" data-rel="Source/ZeroAnim/PlumPoleActor.h" data-line="121">bIsExitPole</a>，<code>|ΔZ|&lt;200</code>）测 <code>JumpToPlatform</code>；深水桩上摆 <a class="code-link" href="../Source/ZeroAnim/PlumPoleProtectVolume.h#L17" data-rel="Source/ZeroAnim/PlumPoleProtectVolume.h" data-line="17">APlumPoleProtectVolume</a>。</li>
+                <li>如需 Wwise 脚步材质射线与起跳音效，参考 <a class="code-link" href="../Source/ZeroAnim/PlumPoleAudio.cpp#L155" data-rel="Source/ZeroAnim/PlumPoleAudio.cpp" data-line="155">ResolveFootstepSurface</a> 与 <a class="code-link" href="../Source/ZeroAnim/PlumPoleAudio.cpp#L423" data-rel="Source/ZeroAnim/PlumPoleAudio.cpp" data-line="423">PlumPoleAudio::Advance</a>。</li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- Interactive Checklist + Troubleshooting -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-3">
+              <div class="flex items-center justify-between">
+                <div class="font-semibold text-sm">从零搭建实战验收清单（每项附带源码直跳）</div>
+                <span id="checkScore" class="text-xs font-mono px-2 py-0.5 rounded bg-[var(--content)] border border-[var(--border)]">0 / 10</span>
+              </div>
+              <div id="checklistContainer" class="space-y-2 text-xs"></div>
+            </div>
+
+            <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-3">
+              <div class="font-semibold text-sm">高频踩坑与排查速查表（直跳排查行）</div>
+              <div class="space-y-2.5 text-xs leading-relaxed">
+                <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)]">
+                  <div class="font-semibold" style="color: var(--error);">症状 1：跳桩时被目标桩沿挡住/弹开，上不去</div>
+                  <div class="text-[var(--muted-foreground)] mt-1">
+                    核对 <a class="code-link" href="../Source/ZeroAnim/PlumPoleActor.cpp#L23" data-rel="Source/ZeroAnim/PlumPoleActor.cpp" data-line="23">PlumPoleActor.cpp</a> 的 <code>BlockAllDynamic</code>（即 <code>ECC_WorldDynamic</code>）是否与
+                    <a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L1998" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="1998">EnterMoveModeWindow</a> 忽略的通道一致。
+                  </div>
+                </div>
+                <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)]">
+                  <div class="font-semibold" style="color: var(--error);">症状 2：角色在桩上双脚扭曲、腿部拉扯或下陷</div>
+                  <div class="text-[var(--muted-foreground)] mt-1">
+                    检查 <code>ABP_PlumPoleManny</code> 中 <code>CR_Mannequin_FootIK</code> 是否已连 <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.h#L33" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.h" data-line="33">LegIKAlpha</a> 与 <code>NOT</code> <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.h#L29" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.h" data-line="29">bDisableLegIK</a>，以及 <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L334" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="334">PreUpdate</a> 是否正常更新。
+                  </div>
+                </div>
+                <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)]">
+                  <div class="font-semibold" style="color: var(--error);">症状 3：落地时角色瞬移或出现双倍位移</div>
+                  <div class="text-[var(--muted-foreground)] mt-1">
+                    核对 <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L516" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="516">NoRootMotionExtraction</a> 和
+                    <a class="code-link" href="../Source/ZeroAnim/PlumPoleAnimInstance.cpp#L143" data-rel="Source/ZeroAnim/PlumPoleAnimInstance.cpp" data-line="143">RootBone归零</a> 是否生效。
+                  </div>
+                </div>
+                <div class="p-3 rounded-lg bg-[var(--content)] border border-[var(--border)]">
+                  <div class="font-semibold" style="color: var(--error);">症状 4：高速移动时视觉骨骼比胶囊体慢 1 帧</div>
+                  <div class="text-[var(--muted-foreground)] mt-1">
+                    核对两处 Tick 前置依赖：<a class="code-link" href="../Source/ZeroAnim/PlumPoleTraversalComponent.cpp#L495" data-rel="Source/ZeroAnim/PlumPoleTraversalComponent.cpp" data-line="495">Traversal→CMC</a> 和
+                    <a class="code-link" href="../Source/ZeroAnim/PlumPoleCharacter.cpp#L222" data-rel="Source/ZeroAnim/PlumPoleCharacter.cpp" data-line="222">Mesh→Traversal</a>。
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Bottom Navigation Footer -->
+        <footer class="pt-4 border-t border-[var(--border)] flex items-center justify-between text-xs text-[var(--muted-foreground)]">
+          <button id="footerPrevBtn" class="px-3.5 py-2 rounded-lg border border-[var(--border)] bg-[var(--card)] hover:bg-[var(--accent)] text-[var(--foreground)] font-medium disabled:opacity-40 cursor-pointer">← 上一步</button>
+          <span id="footerStepHint">Step 1 of 8</span>
+          <button id="footerNextBtn" class="px-3.5 py-2 rounded-lg font-medium cursor-pointer" style="background: var(--primary); color: var(--primary-foreground);">下一步 →</button>
+        </footer>
+      </main>
+    </div>
+  </div>
+
+  <!-- Slide-Over Full Source Map Drawer -->
+  <div id="indexOverlay" class="fixed inset-0 z-40 hidden" style="background: rgba(0,0,0,0.45);"></div>
+  <aside id="indexDrawer" class="fixed top-0 right-0 z-50 h-full w-full max-w-lg bg-[var(--card)] border-l border-[var(--border)] shadow-2xl flex flex-col translate-x-full transition-transform duration-200">
+    <div class="p-4 border-b border-[var(--border)] flex items-center justify-between gap-2">
+      <div>
+        <div class="font-bold text-sm">📑 全量源码行号速查索引（~/ZeroAnim.sln）</div>
+        <div class="text-xs text-[var(--muted-foreground)]">所有条目均为相对路径，随顶部 IDE 模式即时跳转</div>
+      </div>
+      <button id="closeIndexBtn" class="px-2.5 py-1 rounded-md text-xs border border-[var(--border)] bg-[var(--content)] hover:bg-[var(--accent)] cursor-pointer">关闭 ✕</button>
+    </div>
+    <div class="p-3 border-b border-[var(--border)]">
+      <input id="indexSearch" type="text" placeholder="搜索类名、函数名或关键词（如 Warp / Jump / IK / Camera / Combo）..." class="w-full px-3 py-1.5 rounded-md text-xs bg-[var(--content)] text-[var(--foreground)] border border-[var(--border)] outline-none" />
+    </div>
+    <div id="indexList" class="flex-1 overflow-y-auto p-4 space-y-4 text-xs"></div>
+  </aside>
+
+  <!-- Jump Toast -->
+  <div id="jumpToast" class="fixed bottom-4 right-4 z-50 max-w-md p-3 rounded-xl bg-[var(--card)] border border-[var(--primary)] shadow-xl text-xs hidden space-y-2">
+    <div class="flex items-start justify-between gap-3">
+      <div id="jumpToastMsg" class="font-medium leading-relaxed"></div>
+      <button id="closeToastBtn" class="text-[var(--muted-foreground)] hover:text-[var(--foreground)] cursor-pointer">✕</button>
+    </div>
+    <div id="jumpToastActions" class="flex flex-wrap gap-1.5"></div>
+  </div>
+
+  <script>
+    // =========================================================================
+    // Relative Path & Multi-IDE Deep-Link Engine
+    // =========================================================================
+    const IDE_STORAGE_KEY = 'zeroanim_pole_ide_mode';
+    const ideSelect = document.getElementById('ideModeSelect');
+    let ideMode = localStorage.getItem(IDE_STORAGE_KEY) || 'rider';
+    ideSelect.value = ideMode;
+
+    // Infer project/solution root dynamically from window.location (relative ../)
+    function resolveRelativeFileInfo(relPath) {
+      let decodedPathname = '';
+      let projectName = 'ZeroAnim';
+      try {
+        const resolved = new URL('../' + relPath, window.location.href);
+        if (resolved.protocol === 'file:') {
+          decodedPathname = decodeURIComponent(resolved.pathname); // e.g. /D:/UE58Projects/ZeroAnim/Source/...
+          const parts = decodedPathname.split('/').filter(Boolean);
+          const srcIdx = parts.indexOf('Source');
+          const cfgIdx = parts.indexOf('Config');
+          const anchorIdx = srcIdx > 0 ? srcIdx : (cfgIdx > 0 ? cfgIdx : -1);
+          if (anchorIdx > 0) projectName = parts[anchorIdx - 1];
+        }
+      } catch (e) {}
+      // Windows native path for VS 2022 devenv command
+      const winPath = decodedPathname
+        ? decodedPathname.replace(/^\/([A-Za-z]:)/, '$1').replace(/\//g, '\\')
+        : relPath.replace(/\//g, '\\');
+      return { decodedPathname, winPath, projectName };
+    }
+
+    function buildRider63342Url(relPath, line) {
+      const ln = Number(line) || 1;
+      const info = resolveRelativeFileInfo(relPath);
+      const posix = info.decodedPathname ? info.decodedPathname.replace(/^\//, '') : relPath;
+      return `http://127.0.0.1:63342/api/file/${encodeURI(posix)}:${ln}`;
+    }
+
+    function buildCodeHref(relPath, line) {
+      const ln = Number(line) || 1;
+      const info = resolveRelativeFileInfo(relPath);
+      if (ideMode === 'rider') {
+        // Keep forward slashes unencoded in path=Source/ZeroAnim/...:line per JetBrains URI spec
+        return `jetbrains://rd/navigate/reference?project=${encodeURIComponent(info.projectName)}&path=${encodeURI(relPath)}:${ln}`;
+      }
+      if (ideMode === 'rider63342') {
+        return buildRider63342Url(relPath, ln);
+      }
+      if (ideMode === 'vscode') {
+        return info.decodedPathname
+          ? `vscode://file${info.decodedPathname}:${ln}`
+          : `../${relPath}#L${ln}`;
+      }
+      if (ideMode === 'antigravity') {
+        return info.decodedPathname
+          ? `antigravity://file${info.decodedPathname}:${ln}`
+          : `../${relPath}#L${ln}`;
+      }
+      return `../${relPath}#L${ln}`;
+    }
+
+    function syncAllCodeLinks(rootEl = document) {
+      rootEl.querySelectorAll('a[data-rel]').forEach((a) => {
+        const rel = a.dataset.rel;
+        const line = a.dataset.line || '1';
+        a.setAttribute('href', buildCodeHref(rel, line));
+        if (ideMode === 'file') {
+          a.setAttribute('target', '_blank');
+        } else {
+          a.removeAttribute('target');
+        }
+        const modeHint = {
+          rider: `Rider (ZeroAnim.sln) 跳转 → ${rel}:${line}`,
+          rider63342: `Rider 本地直连 (63342) → ${rel}:${line}`,
+          vscode: `VS Code 跳转 → ../${rel}:${line}`,
+          antigravity: `Antigravity 跳转 → ../${rel}:${line}`,
+          vs2022: `VS 2022 复制定位 → ${rel}:${line}`,
+          file: `相对路径打开 → ../${rel}#L${line}`,
+        }[ideMode];
+        a.setAttribute('title', modeHint);
+      });
+    }
+
+    let toastTimer = null;
+    function showJumpToast(rel, line, devenvCmd, riderCli) {
+      const box = document.getElementById('jumpToast');
+      const msg = document.getElementById('jumpToastMsg');
+      const acts = document.getElementById('jumpToastActions');
+      const shortLoc = `${rel}:${line}`;
+      const modeName = ideSelect.options[ideSelect.selectedIndex].text;
+
+      if (ideMode === 'vs2022') {
+        msg.innerHTML = `<span style="color:var(--success)">✓ 已复制 VS 定位：</span><code class="font-mono">${shortLoc}</code><br/><span class="text-[var(--muted-foreground)]">在 Visual Studio 按 <strong>Ctrl+T</strong> 粘贴即可秒跳。</span>`;
+      } else if (ideMode === 'rider63342') {
+        msg.innerHTML = `已向 Rider (127.0.0.1:63342) 发送跳行请求：<br/><code class="font-mono" style="color:var(--link)">~/${shortLoc}</code>`;
+      } else {
+        msg.innerHTML = `已触发 <strong>${modeName}</strong><br/><code class="font-mono" style="color:var(--link)">~/${shortLoc}</code>`;
+      }
+
+      acts.innerHTML = '';
+      const mkBtn = (label, onClick) => {
+        const b = document.createElement('button');
+        b.className = 'px-2 py-1 rounded border border-[var(--border)] bg-[var(--content)] hover:bg-[var(--accent)] cursor-pointer';
+        b.textContent = label;
+        b.addEventListener('click', onClick);
+        acts.appendChild(b);
+      };
+      mkBtn('复制 路径:行号', () => {
+        navigator.clipboard?.writeText(shortLoc);
+        msg.innerHTML = `<span style="color:var(--success)">✓ 已复制</span> <code class="font-mono">${shortLoc}</code>`;
+      });
+      if (devenvCmd && ideMode === 'vs2022') {
+        mkBtn('复制 devenv 命令', () => {
+          navigator.clipboard?.writeText(devenvCmd);
+          msg.innerHTML = `<span style="color:var(--success)">✓ 已复制 VS 2022 跳转命令</span>`;
+        });
+      }
+
+      box.classList.remove('hidden');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => box.classList.add('hidden'), ideMode === 'vs2022' ? 7500 : 4200);
+    }
+
+    document.getElementById('closeToastBtn').addEventListener('click', () => {
+      document.getElementById('jumpToast').classList.add('hidden');
+    });
+
+    // Delegated click handler for ALL relative code links (including dynamically rendered ones)
+    document.addEventListener('click', (e) => {
+      const a = e.target.closest('a[data-rel]');
+      if (!a) return;
+      e.stopPropagation();
+      const rel = a.dataset.rel;
+      const line = a.dataset.line || '1';
+      const info = resolveRelativeFileInfo(rel);
+      const slnInfo = resolveRelativeFileInfo('ZeroAnim.sln');
+      const riderCli = `rider64.exe "${slnInfo.winPath}" --line ${line} "${info.winPath}"`;
+      const devenvCmd = `devenv /Edit "${info.winPath}" /Command "Edit.GoTo ${line}"`;
+
+      if (ideMode === 'vs2022') {
+        e.preventDefault();
+        navigator.clipboard?.writeText(`${rel}:${line}`).catch(() => {});
+        showJumpToast(rel, line, devenvCmd, riderCli);
+      } else if (ideMode === 'rider63342') {
+        e.preventDefault();
+        // Trigger Rider built-in server via Image GET (avoids Origin: null CSRF rejection on file://)
+        const ping = new Image();
+        ping.src = buildRider63342Url(rel, line) + `?_t=${Date.now()}`;
+        showJumpToast(rel, line, devenvCmd, riderCli);
+      } else {
+        a.setAttribute('href', buildCodeHref(rel, line));
+        showJumpToast(rel, line, devenvCmd, riderCli);
+      }
+    });
+
+    ideSelect.addEventListener('change', () => {
+      ideMode = ideSelect.value;
+      localStorage.setItem(IDE_STORAGE_KEY, ideMode);
+      syncAllCodeLinks();
+    });
+
+    function codeLinkHTML(rel, line, label) {
+      const href = buildCodeHref(rel, line);
+      return `<a class="code-link" href="${href}" data-rel="${rel}" data-line="${line}">${label}</a>`;
+    }
+
+    // =========================================================================
+    // Full Source Map Drawer Data (70+ Verified Relative Landmarks)
+    // =========================================================================
+    const SOURCE_INDEX = [
+      {
+        group: '工程与配置 (Build / Config)',
+        items: [
+          { name: 'ZeroAnim.Build.cs — PublicDependencyModuleNames (UMG/Slate/InputCore)', rel: 'Source/ZeroAnim/ZeroAnim.Build.cs', line: 10 },
+          { name: 'ZeroAnim.Build.cs — EnhancedInput 私有依赖', rel: 'Source/ZeroAnim/ZeroAnim.Build.cs', line: 11 },
+          { name: 'ZeroAnim.Build.cs — WITH_POLE_WWISE=1 / 0 编译开关', rel: 'Source/ZeroAnim/ZeroAnim.Build.cs', line: 19 },
+          { name: 'DefaultEngine.ini — EditorStartupMap / GameDefaultMap (Lvl_PlumPole)', rel: 'Config/DefaultEngine.ini', line: 7 },
+        ]
+      },
+      {
+        group: '梅花桩与保护区 (APlumPoleActor / ProtectVolume)',
+        items: [
+          { name: 'APlumPoleActor 类定义 (.h)', rel: 'Source/ZeroAnim/PlumPoleActor.h', line: 12 },
+          { name: 'ExitStandPointOffsetZ (+0.1268 cm 出口贴地偏移)', rel: 'Source/ZeroAnim/PlumPoleActor.h', line: 17 },
+          { name: 'StandPoint / bIsExitPole / bAllowJumpOut 属性', rel: 'Source/ZeroAnim/PlumPoleActor.h', line: 94 },
+          { name: 'APlumPoleActor::APlumPoleActor() — BlockAllDynamic 碰撞与圆柱网格', rel: 'Source/ZeroAnim/PlumPoleActor.cpp', line: 15 },
+          { name: 'ApplyPoleConfiguration() — 普通桩 vs 出口桩尺寸/显隐配置', rel: 'Source/ZeroAnim/PlumPoleActor.cpp', line: 80 },
+          { name: 'GetLandingLocation() — 返回 StandPoint 世界落点', rel: 'Source/ZeroAnim/PlumPoleActor.cpp', line: 157 },
+          { name: 'TryReserve() / Release() — 事务性占用锁', rel: 'Source/ZeroAnim/PlumPoleActor.cpp', line: 177 },
+          { name: 'APlumPoleProtectVolume 类定义 (.h)', rel: 'Source/ZeroAnim/PlumPoleProtectVolume.h', line: 17 },
+          { name: 'IsPrimaryCharacterCapsule() — 主胶囊体过滤', rel: 'Source/ZeroAnim/PlumPoleProtectVolume.cpp', line: 10 },
+          { name: 'RegisterActorOverlap() / UnregisterActorOverlap()', rel: 'Source/ZeroAnim/PlumPoleProtectVolume.cpp', line: 100 },
+        ]
+      },
+      {
+        group: '核心跳桩状态机 (UPlumPoleTraversalComponent)',
+        items: [
+          { name: 'EPlumPoleTraversalState / EPlumPoleTimeline / EPlumPoleActionPhase', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.h', line: 14 },
+          { name: 'UPlumPoleTraversalComponent 类定义与三大动态委托', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.h', line: 105 },
+          { name: '选桩常量：500cm / 350cm / 90° / ΔZ=200cm', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.h', line: 291 },
+          { name: 'FPlumPoleTimelineSpec — 8 条时间轴全参数表', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 23 },
+          { name: 'DashSpec / JumpLSpec / JumpRSpec / IdleLSpec', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 77 },
+          { name: 'JumpToPlatformLSpec / JumpOffSpec', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 167 },
+          { name: 'GetDashRateCurve / GetJumpRateCurve / GetJumpOffRateCurve (FRichCurve)', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 260 },
+          { name: 'SelectPoleActor() — 90° 锥角 + 最近/最远 2D 选桩', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 371 },
+          { name: 'BeginPlay() — AddTickPrerequisiteComponent(CharacterMovement)', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 484 },
+          { name: 'LeftOrRight() — 左右脚交替规则', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 579 },
+          { name: 'HasPreJumpTag() / CanMove() / CanDash()', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 600 },
+          { name: 'HasSafePoleArrivalAndSupport() — 落桩容差与可行走表面验证', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 667 },
+          { name: 'FindEnterablePole() / FindVirtualAwarenessPole()', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 792 },
+          { name: 'TryTraverse() / TryGroundEntry() / TryActiveJumpOff()', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 844 },
+          { name: 'OnMove2D() / OnMove() (350cm 近跳 + 回退 OnDash)', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 909 },
+          { name: 'OnDash() (500cm 最远桩 + PreJump 打断 + Act 缓冲)', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 985 },
+          { name: 'ActivatePoleAbility() / EndPoleAbility()', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 1034 },
+          { name: 'MoveToPole() — 出口桩分支(L1138) 与 普通桩事务预约(L1190)', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 1122 },
+          { name: 'StartTimeline() & CalcWarpingTarget()', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 1241 },
+          { name: 'AdvanceActiveTimeline() — RK2 变速积分 + ConsiderEvent 子步切分', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 1323 },
+          { name: 'ApplySkewWarpMotion() — Stage 1 纯转向 + Stage 2 XY/Z 扭曲位移', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 1674 },
+          { name: 'ApplyJumpOffMotion() — RM_Input 720°/s 转向 + 水平根运动', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 1845 },
+          { name: 'SampleActiveClipRootInActorSpace() / SampleCurveTravelFallback()', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 1906 },
+          { name: 'EnterPoleCmcScope / EnterMoveModeWindow / EnterGravityScaleWindow', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp', line: 1939 },
+        ]
+      },
+      {
+        group: '角色蓝图基类与输入 (APlumPoleCharacter)',
+        items: [
+          { name: 'FPlumPolePlayback 结构 & APlumPoleCharacter 类定义 (.h)', rel: 'Source/ZeroAnim/PlumPoleCharacter.h', line: 64 },
+          { name: 'ChooseTimelinePlayback (BlueprintNativeEvent) 与旧兼容钩子说明', rel: 'Source/ZeroAnim/PlumPoleCharacter.h', line: 107 },
+          { name: '输入 / UI / PBZ 相机增量 / 8 动画 UPROPERTY 声明', rel: 'Source/ZeroAnim/PlumPoleCharacter.h', line: 130 },
+          { name: 'GetPBZBlendOut() — 下桩淡出时间与曲线表', rel: 'Source/ZeroAnim/PlumPoleCharacter.cpp', line: 21 },
+          { name: 'APlumPoleCharacter() — 创建组件 + 自动加载 IA_Move 与 8 动画', rel: 'Source/ZeroAnim/PlumPoleCharacter.cpp', line: 44 },
+          { name: 'ChooseTimelinePlayback_Implementation()', rel: 'Source/ZeroAnim/PlumPoleCharacter.cpp', line: 140 },
+          { name: 'BeginPlay() — Mesh Tick 前置依赖 + 委托绑定 + Widget 初始化', rel: 'Source/ZeroAnim/PlumPoleCharacter.cpp', line: 218 },
+          { name: 'ResolveActiveCameraComponents() / OnCameraAdditiveChanged() / UpdatePlumPoleCamera()', rel: 'Source/ZeroAnim/PlumPoleCharacter.cpp', line: 313 },
+          { name: 'UpdateInteractPrompt() — 双区探测 + 屏幕边缘箭头投影', rel: 'Source/ZeroAnim/PlumPoleCharacter.cpp', line: 485 },
+          { name: 'Jump() — 拦截第三人称跳跃键，优先 TryTraverse()', rel: 'Source/ZeroAnim/PlumPoleCharacter.cpp', line: 701 },
+          { name: 'GetTraversalAnimationFrame() & OnTimelineChanged()', rel: 'Source/ZeroAnim/PlumPoleCharacter.cpp', line: 709 },
+          { name: 'FPlumPoleInputDeviceProcessor — Slate 全局键鼠/手柄热切换检测', rel: 'Source/ZeroAnim/PlumPoleCharacterInput.cpp', line: 13 },
+          { name: 'SetupPlayerInputComponent() — 注册 IMC_PlumPole & 绑定 Flip/Move', rel: 'Source/ZeroAnim/PlumPoleCharacterInput.cpp', line: 91 },
+          { name: 'HandlePoleFlipInput() & HandlePoleMoveInput()', rel: 'Source/ZeroAnim/PlumPoleCharacterInput.cpp', line: 151 },
+        ]
+      },
+      {
+        group: '动画蓝图基类与 Proxy (UPlumPoleAnimInstance)',
+        items: [
+          { name: 'UPlumPoleAnimInstance 类定义 — bDisableLegIK / LegIKAlpha (.h)', rel: 'Source/ZeroAnim/PlumPoleAnimInstance.h', line: 22 },
+          { name: 'MaxOutgoingLayers = 6 & FClipLayer::Sample() (清零 RootBone)', rel: 'Source/ZeroAnim/PlumPoleAnimInstance.cpp', line: 15 },
+          { name: 'FPlumPoleAnimInstanceProxy 类定义', rel: 'Source/ZeroAnim/PlumPoleAnimInstance.cpp', line: 148 },
+          { name: 'SetTimelineClip() — 推入 Outgoing 队列与新建 Current 层', rel: 'Source/ZeroAnim/PlumPoleAnimInstance.cpp', line: 171 },
+          { name: 'PreUpdate() — 同步源时间与 LegIKAlpha 到动画线程', rel: 'Source/ZeroAnim/PlumPoleAnimInstance.cpp', line: 324 },
+          { name: 'Evaluate_WithRoot() — 多层姿势加权融合 & BasePose 回退', rel: 'Source/ZeroAnim/PlumPoleAnimInstance.cpp', line: 352 },
+          { name: 'EvaluateBasePose() — 执行原版 ABP_Unarmed AnimGraph', rel: 'Source/ZeroAnim/PlumPoleAnimInstance.cpp', line: 455 },
+          { name: 'NativeInitializeAnimation() — NoRootMotionExtraction', rel: 'Source/ZeroAnim/PlumPoleAnimInstance.cpp', line: 513 },
+          { name: 'CreateAnimInstanceProxy() — 挂载自定义 Proxy', rel: 'Source/ZeroAnim/PlumPoleAnimInstance.cpp', line: 536 },
+        ]
+      },
+      {
+        group: '交互提示 UI 与音效 (PromptWidget / Audio)',
+        items: [
+          { name: 'EPlumPoleInteractUIState (5 状态) & UPlumPoleInteractPromptWidget (.h)', rel: 'Source/ZeroAnim/PlumPoleInteractPromptWidget.h', line: 16 },
+          { name: 'GetTransitionSpec() — 全部 20 组状态过渡关键帧', rel: 'Source/ZeroAnim/PlumPoleInteractPromptWidget.cpp', line: 120 },
+          { name: 'RebuildWidget() — 纯 Slate 三层 Overlay 构建', rel: 'Source/ZeroAnim/PlumPoleInteractPromptWidget.cpp', line: 366 },
+          { name: 'PlumPoleAudio 命名空间 (.h)', rel: 'Source/ZeroAnim/PlumPoleAudio.h', line: 8 },
+          { name: 'GetCues() — 各时间轴帧对齐音效触发点', rel: 'Source/ZeroAnim/PlumPoleAudio.cpp', line: 71 },
+          { name: 'ResolveFootstepSurface() — 下桩脚步材质射线检测', rel: 'Source/ZeroAnim/PlumPoleAudio.cpp', line: 155 },
+          { name: 'PlumPoleAudio::Advance / BlendOut / PlayFootstep', rel: 'Source/ZeroAnim/PlumPoleAudio.cpp', line: 423 },
+        ]
+      }
+    ];
+
+    function renderIndexDrawer(filter = '') {
+      const q = filter.trim().toLowerCase();
+      const container = document.getElementById('indexList');
+      container.innerHTML = '';
+      SOURCE_INDEX.forEach((grp) => {
+        const matched = grp.items.filter((it) => !q || it.name.toLowerCase().includes(q) || it.rel.toLowerCase().includes(q));
+        if (!matched.length) return;
+        const sec = document.createElement('div');
+        sec.className = 'space-y-1.5';
+        sec.innerHTML = `<div class="font-bold text-[var(--foreground)] pb-1 border-b border-[var(--border)]">${grp.group}</div>`;
+        matched.forEach((it) => {
+          const row = document.createElement('div');
+          row.className = 'flex flex-wrap items-center justify-between gap-2 py-1.5 px-2 rounded hover:bg-[var(--content)]';
+          const shortFile = it.rel.split('/').pop();
+          row.innerHTML = `
+            <span class="text-[var(--muted-foreground)] min-w-0 flex-1 break-words" title="${it.name}">${it.name}</span>
+            <a class="code-link shrink-0" href="${buildCodeHref(it.rel, it.line)}" data-rel="${it.rel}" data-line="${it.line}">${shortFile}</a>
+          `;
+          sec.appendChild(row);
+        });
+        container.appendChild(sec);
+      });
+      syncAllCodeLinks(container);
+    }
+
+    const indexDrawer = document.getElementById('indexDrawer');
+    const indexOverlay = document.getElementById('indexOverlay');
+    function setDrawerOpen(open) {
+      indexOverlay.classList.toggle('hidden', !open);
+      indexDrawer.classList.toggle('translate-x-full', !open);
+      if (open) document.getElementById('indexSearch').focus();
+    }
+    document.getElementById('openIndexBtn').addEventListener('click', () => setDrawerOpen(true));
+    document.getElementById('closeIndexBtn').addEventListener('click', () => setDrawerOpen(false));
+    indexOverlay.addEventListener('click', () => setDrawerOpen(false));
+    document.getElementById('indexSearch').addEventListener('input', (e) => renderIndexDrawer(e.target.value));
+    renderIndexDrawer();
+
+    // =========================================================================
+    // Theme Helper (Dynamic Sync with Antigravity Light/Dark Theme)
+    // =========================================================================
+    function getThemeColors() {
+      const s = getComputedStyle(document.documentElement);
+      const pick = (name, fb) => (s.getPropertyValue(name).trim() || fb);
+      const isLight = document.documentElement.classList.contains('light');
+      return {
+        isLight,
+        bg: pick('--content', isLight ? '#f4f4f5' : '#18181b'),
+        card: pick('--card', isLight ? '#ffffff' : '#1f1f23'),
+        border: pick('--border', isLight ? '#d4d4d8' : '#3f3f46'),
+        fg: pick('--foreground', isLight ? '#18181b' : '#f4f4f5'),
+        muted: pick('--muted-foreground', isLight ? '#71717a' : '#a1a1aa'),
+        primary: pick('--primary', '#3b82f6'),
+        primaryFg: pick('--primary-foreground', '#ffffff'),
+        success: pick('--success', '#22c55e'),
+        warning: pick('--warning', '#f59e0b'),
+        error: pick('--error', '#ef4444'),
+        c1: pick('--chart-1', '#3b82f6'),
+        c2: pick('--chart-2', '#10b981'),
+        c3: pick('--chart-3', '#f59e0b'),
+        c4: pick('--chart-4', '#a855f7'),
+        c5: pick('--chart-5', '#ec4899'),
+      };
+    }
+
+    function setupCanvas(canvas) {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width < 10 || rect.height < 10) return null;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const w = Math.round(rect.width);
+      const h = Math.round(rect.height);
+      if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+      }
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return { ctx, w, h };
+    }
+
+    // =========================================================================
+    // Step Navigation Controller
+    // =========================================================================
+    const STEPS = [
+      { id: 0, short: '1. 全局架构总览', sub: '零侵入 4 层设计' },
+      { id: 1, short: '2. 工程与资产准备', sub: 'Build.cs · 输入 · 8 动画' },
+      { id: 2, short: '3. 梅花桩与保护区', sub: 'StandPoint · 碰撞通道' },
+      { id: 3, short: '4. 选桩与左右脚状态机', sub: '俯视交互模拟器' },
+      { id: 4, short: '5. 变速曲线与 SkewWarp', sub: '时间轴实验室' },
+      { id: 5, short: '6. 改造角色蓝图', sub: 'BP_SoulThirdPerson' },
+      { id: 6, short: '7. 改造动画蓝图与 Proxy', sub: 'ABP_PlumPoleManny' },
+      { id: 7, short: '8. GameMode 与验收', sub: 'UI · 关卡 · 排错表' },
+    ];
+
+    let currentStep = 0;
+    const stepNav = document.getElementById('stepNav');
+    const stepPanels = [...document.querySelectorAll('.step-panel')];
+
+    STEPS.forEach((st) => {
+      const btn = document.createElement('button');
+      btn.className = 'step-btn w-full text-left px-3 py-2 rounded-lg border border-transparent transition-colors cursor-pointer';
+      btn.dataset.step = st.id;
+      btn.dataset.active = st.id === 0 ? 'true' : 'false';
+      btn.innerHTML = `<div class="text-xs font-semibold leading-snug">${st.short}</div><div class="text-xs opacity-75 truncate">${st.sub}</div>`;
+      btn.addEventListener('click', () => goToStep(st.id));
+      stepNav.appendChild(btn);
+    });
+
+    function goToStep(idx) {
+      currentStep = Math.max(0, Math.min(STEPS.length - 1, idx));
+      stepPanels.forEach((p) => p.classList.toggle('hidden', Number(p.dataset.step) !== currentStep));
+      [...stepNav.children].forEach((b) => { b.dataset.active = Number(b.dataset.step) === currentStep ? 'true' : 'false'; });
+
+      const pct = ((currentStep + 1) / STEPS.length) * 100;
+      document.getElementById('topProgressBar').style.width = `${pct}%`;
+      document.getElementById('topProgressText').textContent = `${currentStep + 1} / ${STEPS.length}`;
+      document.getElementById('footerStepHint').textContent = `Step ${currentStep + 1} of ${STEPS.length} · ${STEPS[currentStep].short}`;
+
+      const isFirst = currentStep === 0;
+      const isLast = currentStep === STEPS.length - 1;
+      document.getElementById('prevStepBtn').disabled = isFirst;
+      document.getElementById('footerPrevBtn').disabled = isFirst;
+      document.getElementById('nextStepBtn').disabled = isLast;
+      document.getElementById('footerNextBtn').disabled = isLast;
+
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      requestAnimationFrame(redrawVisibleCanvases);
+    }
+
+    document.getElementById('prevStepBtn').addEventListener('click', () => goToStep(currentStep - 1));
+    document.getElementById('nextStepBtn').addEventListener('click', () => goToStep(currentStep + 1));
+    document.getElementById('footerPrevBtn').addEventListener('click', () => goToStep(currentStep - 1));
+    document.getElementById('footerNextBtn').addEventListener('click', () => goToStep(currentStep + 1));
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { setDrawerOpen(false); return; }
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+      if (e.key === 'ArrowRight') goToStep(currentStep + 1);
+      if (e.key === 'ArrowLeft') goToStep(currentStep - 1);
+    });
+
+    // =========================================================================
+    // STEP 0: Architecture Explorer
+    // =========================================================================
+    const ARCH_INFO = {
+      pole: {
+        title: 'APlumPoleActor + APlumPoleProtectVolume（场景物件层）',
+        links: [
+          ['Source/ZeroAnim/PlumPoleActor.h', 12, 'PlumPoleActor.h'],
+          ['Source/ZeroAnim/PlumPoleActor.cpp', 80, 'PlumPoleActor.cpp'],
+          ['Source/ZeroAnim/PlumPoleProtectVolume.h', 17, 'PlumPoleProtectVolume.h'],
+          ['Source/ZeroAnim/PlumPoleProtectVolume.cpp', 80, 'PlumPoleProtectVolume.cpp'],
+        ],
+        desc: '负责提供物理站立面与精确落脚锚点 StandPoint。碰撞通道必须是 BlockAllDynamic (ECC_WorldDynamic)，以便腾空窗口临时忽略；内置 bIsExitPole 区分普通桩与出口桩，用 Occupant 弱指针做事务性占用锁。',
+        flows: [
+          () => `提供 ${codeLinkHTML('Source/ZeroAnim/PlumPoleActor.cpp', 157, 'GetLandingLocation()')} 给 TraversalComponent 计算 ${codeLinkHTML('Source/ZeroAnim/PlumPoleTraversalComponent.cpp', 1301, 'CalcWarpingTarget()')}`,
+          () => `ProtectVolume 触发 Overlap 时调用 ${codeLinkHTML('Source/ZeroAnim/PlumPoleTraversalComponent.cpp', 559, 'AddJumpOutProtectOverlap()')} 增减防跳落引用计数`,
+        ],
+      },
+      char: {
+        title: 'APlumPoleCharacter（角色桥接基类 · BP_SoulThirdPerson 父类）',
+        links: [
+          ['Source/ZeroAnim/PlumPoleCharacter.h', 64, 'PlumPoleCharacter.h'],
+          ['Source/ZeroAnim/PlumPoleCharacter.cpp', 218, 'PlumPoleCharacter.cpp'],
+          ['Source/ZeroAnim/PlumPoleCharacter.cpp', 701, 'PlumPoleCharacter.cpp'],
+          ['Source/ZeroAnim/PlumPoleCharacterInput.cpp', 91, 'PlumPoleCharacterInput.cpp'],
+        ],
+        desc: '继承自 ACharacter，取代原第三人称模板的父类。负责挂接 PlumPoleTraversal 与 InteractPromptComponent，重写 Jump() 拦截空格键，额外监听 IA_Move 与 IA_PoleFlip，驱动 SpringArm 0.5s 增量镜头偏移，并把时间轴切换事件转发给动画实例。',
+        flows: [
+          () => `${codeLinkHTML('Source/ZeroAnim/PlumPoleCharacter.cpp', 222, 'BeginPlay')} 注册 Tick 依赖：Mesh 必须在 PlumPoleTraversal 之后更新`,
+          () => `监听 ${codeLinkHTML('Source/ZeroAnim/PlumPoleCharacter.cpp', 724, 'OnTimelineChanged')} → 调用 ${codeLinkHTML('Source/ZeroAnim/PlumPoleCharacter.cpp', 140, 'ChooseTimelinePlayback')} → 下发给 ${codeLinkHTML('Source/ZeroAnim/PlumPoleAnimInstance.cpp', 479, 'SetTimelineClip')}`,
+        ],
+      },
+      comp: {
+        title: 'UPlumPoleTraversalComponent（核心运动与状态机大脑）',
+        links: [
+          ['Source/ZeroAnim/PlumPoleTraversalComponent.h', 105, 'PlumPoleTraversalComponent.h'],
+          ['Source/ZeroAnim/PlumPoleTraversalComponent.cpp', 371, 'PlumPoleTraversalComponent.cpp'],
+          ['Source/ZeroAnim/PlumPoleTraversalComponent.cpp', 1323, 'PlumPoleTraversalComponent.cpp'],
+          ['Source/ZeroAnim/PlumPoleTraversalComponent.cpp', 1674, 'PlumPoleTraversalComponent.cpp'],
+        ],
+        desc: '纯 C++ ActorComponent，完整复刻 PBZ GA_StandingOnPole：包含 90° 锥形选桩、LeftOrRight() 左右脚交替、8 条时间轴的 RK2 变速曲线推进与子步事件切分、两阶段 SkewWarp 胶囊体位移，以及 CMC 飞行/碰撞/重力窗口托管。',
+        flows: [
+          () => `TickGroup = TG_PrePhysics，且在 ${codeLinkHTML('Source/ZeroAnim/PlumPoleTraversalComponent.cpp', 495, 'BeginPlay')} 依赖 CharacterMovement 先 Tick`,
+          () => `对外广播 ${codeLinkHTML('Source/ZeroAnim/PlumPoleTraversalComponent.h', 273, 'OnTraversalStateChanged')}、${codeLinkHTML('Source/ZeroAnim/PlumPoleTraversalComponent.h', 277, 'OnTimelineChanged')}、${codeLinkHTML('Source/ZeroAnim/PlumPoleTraversalComponent.h', 281, 'OnCameraAdditiveChanged')}`,
+        ],
+      },
+      anim: {
+        title: 'UPlumPoleAnimInstance + FPlumPoleAnimInstanceProxy（动画代理层）',
+        links: [
+          ['Source/ZeroAnim/PlumPoleAnimInstance.h', 22, 'PlumPoleAnimInstance.h'],
+          ['Source/ZeroAnim/PlumPoleAnimInstance.cpp', 148, 'PlumPoleAnimInstance.cpp'],
+          ['Source/ZeroAnim/PlumPoleAnimInstance.cpp', 352, 'PlumPoleAnimInstance.cpp'],
+          ['Source/ZeroAnim/PlumPoleAnimInstance.cpp', 513, 'PlumPoleAnimInstance.cpp'],
+        ],
+        desc: '作为 ABP_PlumPoleManny 的父类。在 AnimGraph 层仅暴露 LegIKAlpha 与 bDisableLegIK 关闭脚部 IK；真正播放跳桩动画的是底层自定义 FAnimInstanceProxy：在 Evaluate_WithRoot() 直接按源时间采样最多 6 层 Outgoing + Current 序列，并与地面 BasePose 加权混合。',
+        flows: [
+          () => `${codeLinkHTML('Source/ZeroAnim/PlumPoleAnimInstance.cpp', 324, 'PreUpdate')} 从角色读取 ${codeLinkHTML('Source/ZeroAnim/PlumPoleCharacter.cpp', 709, 'GetTraversalAnimationFrame')} 同步到动画工作线程`,
+          () => `${codeLinkHTML('Source/ZeroAnim/PlumPoleAnimInstance.cpp', 352, 'Evaluate_WithRoot')} 在地面时透传 ${codeLinkHTML('Source/ZeroAnim/PlumPoleAnimInstance.cpp', 455, 'EvaluateBasePose')}，在桩上时多层混合并清零 ${codeLinkHTML('Source/ZeroAnim/PlumPoleAnimInstance.cpp', 143, 'RootBone')}`,
+        ],
+      },
+      ui: {
+        title: 'UPlumPoleInteractPromptWidget & PlumPoleAudio（表现层）',
+        links: [
+          ['Source/ZeroAnim/PlumPoleInteractPromptWidget.h', 42, 'PlumPoleInteractPromptWidget.h'],
+          ['Source/ZeroAnim/PlumPoleInteractPromptWidget.cpp', 366, 'PlumPoleInteractPromptWidget.cpp'],
+          ['Source/ZeroAnim/PlumPoleAudio.h', 8, 'PlumPoleAudio.h'],
+          ['Source/ZeroAnim/PlumPoleAudio.cpp', 71, 'PlumPoleAudio.cpp'],
+        ],
+        desc: 'UI Widget 用纯 Slate (RebuildWidget) 还原 5 状态交互提示（None / Virtual / InputAction / *Screen 边缘箭头）与 20 组过渡曲线，配合 Slate InputPreProcessor 自动识别键鼠/手柄图标；Audio 在时间轴推进到关键帧时触发起跳衣料风声与表面检测脚步声。',
+        flows: [
+          () => `Grounded 状态下每帧由 ${codeLinkHTML('Source/ZeroAnim/PlumPoleCharacter.cpp', 485, 'UpdateInteractPrompt')} 扫描 500cm / 900cm 两层区域并投影屏幕边缘箭头`,
+          () => `支持 ${codeLinkHTML('Source/ZeroAnim/ZeroAnim.Build.cs', 40, 'WITH_POLE_WWISE=0')} 编译开关，无 Wwise SDK 也能正常编译运行核心跳桩`,
+        ],
+      },
+    };
+
+    function renderArchDetail(key) {
+      const item = ARCH_INFO[key];
+      document.querySelectorAll('.arch-node').forEach((n) => {
+        n.dataset.selected = n.dataset.arch === key ? 'true' : 'false';
+      });
+      const box = document.getElementById('archDetailBox');
+      box.innerHTML = `
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="font-bold text-[var(--foreground)]">${item.title}</div>
+          <div class="flex flex-wrap gap-1.5">
+            ${item.links.map(([rel, ln, lbl]) => codeLinkHTML(rel, ln, lbl)).join('')}
+          </div>
+        </div>
+        <p class="text-xs text-[var(--muted-foreground)] leading-relaxed">${item.desc}</p>
+        <div class="pt-1 space-y-1.5">
+          ${item.flows.map((fn) => `<div class="text-xs flex items-start gap-1.5"><span style="color: var(--primary);">▸</span><span>${fn()}</span></div>`).join('')}
+        </div>
+      `;
+      syncAllCodeLinks(box);
+    }
+    document.querySelectorAll('.arch-node').forEach((n) => n.addEventListener('click', () => renderArchDetail(n.dataset.arch)));
+    renderArchDetail('comp');
+
+    // =========================================================================
+    // STEP 2: Pole Cross-Section Visualizer
+    // =========================================================================
+    let poleMode = 'normal';
+    const poleHeightSlider = document.getElementById('poleHeightSlider');
+    const poleRadiusSlider = document.getElementById('poleRadiusSlider');
+    const poleFlyingToggle = document.getElementById('poleFlyingToggle');
+
+    function drawPoleCanvas() {
+      const canvas = document.getElementById('poleCanvas');
+      const setup = setupCanvas(canvas);
+      if (!setup) return;
+      const { ctx, w, h } = setup;
+      const c = getThemeColors();
+
+      const poleH = Number(poleHeightSlider.value);
+      const poleR = Number(poleRadiusSlider.value);
+      const isFlying = poleFlyingToggle.checked;
+      document.getElementById('poleHeightVal').textContent = `${poleH} cm`;
+      document.getElementById('poleRadiusVal').textContent = `${poleR} cm`;
+
+      ctx.fillStyle = c.bg;
+      ctx.fillRect(0, 0, w, h);
+
+      const groundY = h - 38;
+      const scale = 0.68;
+      ctx.strokeStyle = c.border;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(20, groundY);
+      ctx.lineTo(w - 20, groundY);
+      ctx.stroke();
+
+      ctx.fillStyle = c.muted;
+      ctx.font = '12px sans-serif';
+      ctx.fillText('地面 Z = 0', 26, groundY + 18);
+
+      const leftX = w * 0.28;
+      const pHpx = poleH * scale;
+      const pRpx = poleR * scale;
+
+      ctx.fillStyle = c.card;
+      ctx.strokeStyle = c.c1;
+      ctx.lineWidth = 2;
+      ctx.fillRect(leftX - pRpx, groundY - pHpx, pRpx * 2, pHpx);
+      ctx.strokeRect(leftX - pRpx, groundY - pHpx, pRpx * 2, pHpx);
+
+      const colHalfW = pRpx * 0.72;
+      ctx.save();
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = isFlying ? c.muted : c.warning;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(leftX - colHalfW, groundY - pHpx, colHalfW * 2, pHpx);
+      ctx.restore();
+
+      ctx.fillStyle = c.success;
+      ctx.beginPath();
+      ctx.arc(leftX, groundY - pHpx, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = c.fg;
+      ctx.font = '12px monospace';
+      ctx.fillText(`StandPoint (Z=${poleH})`, leftX - 66, groundY - pHpx - 10);
+
+      if (poleMode === 'protect') {
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.14)';
+        ctx.strokeStyle = c.error;
+        ctx.lineWidth = 1.5;
+        ctx.fillRect(leftX - 85, groundY - pHpx - 75, 170, 95);
+        ctx.strokeRect(leftX - 85, groundY - pHpx - 75, 170, 95);
+        ctx.fillStyle = c.error;
+        ctx.font = '12px sans-serif';
+        ctx.fillText('APlumPoleProtectVolume (禁止按 Jump 跳落)', leftX - 80, groundY - pHpx - 58);
+      }
+
+      const rightX = w * 0.72;
+      let targetZ = poleH;
+      if (poleMode === 'normal' || poleMode === 'protect') {
+        targetZ = poleH;
+        const tH = targetZ * scale;
+        ctx.fillStyle = c.card;
+        ctx.strokeStyle = c.c1;
+        ctx.lineWidth = 2;
+        ctx.fillRect(rightX - pRpx, groundY - tH, pRpx * 2, tH);
+        ctx.strokeRect(rightX - pRpx, groundY - tH, pRpx * 2, tH);
+        ctx.fillStyle = c.success;
+        ctx.beginPath();
+        ctx.arc(rightX, groundY - tH, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = c.muted;
+        ctx.font = '12px sans-serif';
+        ctx.fillText('相邻梅花桩 (ECC_WorldDynamic)', rightX - 85, groundY + 18);
+      } else if (poleMode === 'exit_low') {
+        targetZ = Math.max(40, poleH - 30);
+        const platY = groundY - targetZ * scale;
+        ctx.fillStyle = c.card;
+        ctx.strokeStyle = c.success;
+        ctx.lineWidth = 2;
+        ctx.fillRect(rightX - 60, platY, 130, groundY - platY);
+        ctx.strokeRect(rightX - 60, platY, 130, groundY - platY);
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = c.success;
+        ctx.strokeRect(rightX - 18, platY - 14, 36, 14);
+        ctx.setLineDash([]);
+        ctx.fillStyle = c.success;
+        ctx.beginPath();
+        ctx.arc(rightX, platY - 1, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = c.fg;
+        ctx.font = '12px monospace';
+        ctx.fillText(`出口桩 |ΔZ|=${Math.abs(targetZ - poleH)}cm < 200`, rightX - 80, platY - 22);
+      } else if (poleMode === 'exit_high') {
+        targetZ = 0;
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = c.warning;
+        ctx.strokeRect(rightX - 18, groundY - 14, 36, 14);
+        ctx.setLineDash([]);
+        ctx.fillStyle = c.warning;
+        ctx.beginPath();
+        ctx.arc(rightX, groundY - 1, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = c.fg;
+        ctx.font = '12px monospace';
+        const dz = Math.abs(targetZ - poleH);
+        ctx.fillText(`出口桩 |ΔZ|=${dz}cm ${dz < 200 ? '< 200' : '≥ 200'}`, rightX - 80, groundY - 22);
+      }
+
+      const startY = groundY - pHpx;
+      const endY = groundY - targetZ * scale;
+      ctx.strokeStyle = isFlying ? c.primary : c.c2;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(leftX, startY - 6);
+      ctx.quadraticCurveTo((leftX + rightX) / 2, Math.min(startY, endY) - 65, rightX, endY - 6);
+      ctx.stroke();
+
+      if (isFlying) {
+        const midX = (leftX + rightX) / 2;
+        const midY = Math.min(startY, endY) - 38;
+        ctx.fillStyle = c.primary;
+        ctx.beginPath();
+        ctx.roundRect(midX - 10, midY - 18, 20, 36, 10);
+        ctx.fill();
+        ctx.fillStyle = c.primary;
+        ctx.font = '12px sans-serif';
+        ctx.fillText('MOVE_Flying + 忽略 WorldDynamic', midX - 92, midY - 26);
+      }
+
+      const dzVal = Math.abs(targetZ - poleH);
+      const infoMap = {
+        normal: `<strong>普通梅花桩</strong>：Collision 使用 ${codeLinkHTML('Source/ZeroAnim/PlumPoleActor.cpp', 122, 'BlockAllDynamic')}，盒体半宽为 ${codeLinkHTML('Source/ZeroAnim/PlumPoleActor.cpp', 124, 'Radius*0.72')} = ${(poleR * 0.72).toFixed(1)} cm。${isFlying ? '<span style="color:var(--primary)">当前腾空窗口已忽略 WorldDynamic，胶囊体可无阻掠过桩沿！</span>' : '站立时提供实体阻挡与可行走表面。'}`,
+        exit_low: `<strong>平齐出口桩</strong> (${codeLinkHTML('Source/ZeroAnim/PlumPoleActor.cpp', 87, 'bIsExitPole')})：隐藏网格关闭碰撞，<code>StandPoint</code> 偏移 ${codeLinkHTML('Source/ZeroAnim/PlumPoleActor.h', 17, '+0.1268cm')}。高度差 <code>|ΔZ|=${dzVal}cm &lt; 200cm</code> → 在 ${codeLinkHTML('Source/ZeroAnim/PlumPoleTraversalComponent.cpp', 1171, 'MoveToPole')} 触发 <strong>JumpToPlatform_L/R</strong>！`,
+        exit_high: `<strong>高落差出口桩</strong> (${codeLinkHTML('Source/ZeroAnim/PlumPoleTraversalComponent.cpp', 1138, 'IsExitPole分支')})：当前桩高 ${poleH}cm，<code>|ΔZ|=${dzVal}cm</code>。${dzVal >= 200 ? '满足 <code>≥ 200 cm</code> → 自动切换 <strong>JumpOff</strong> 空中翻身低重力跳落！' : '当前高度不足 200cm，请把 Height 滑块拖到 200cm 以上观察切换为 JumpOff！'}`,
+        protect: `<strong>防跳落保护区</strong> (${codeLinkHTML('Source/ZeroAnim/PlumPoleProtectVolume.cpp', 100, 'RegisterActorOverlap')})：重叠期间 ${codeLinkHTML('Source/ZeroAnim/PlumPoleTraversalComponent.cpp', 891, 'TryActiveJumpOff')} 拦截按 Jump 跳下，但仍可正常跳往其他桩或出口桩。`,
+      };
+      const card = document.getElementById('poleInfoCard');
+      card.innerHTML = infoMap[poleMode];
+      syncAllCodeLinks(card);
+    }
+
+    document.querySelectorAll('.pole-mode-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        poleMode = btn.dataset.mode;
+        if (poleMode === 'exit_high' && Number(poleHeightSlider.value) < 220) poleHeightSlider.value = 230;
+        document.querySelectorAll('.pole-mode-btn').forEach((b) => { b.dataset.active = b.dataset.mode === poleMode ? 'true' : 'false'; });
+        drawPoleCanvas();
+      });
+    });
+    poleHeightSlider.addEventListener('input', drawPoleCanvas);
+    poleRadiusSlider.addEventListener('input', drawPoleCanvas);
+    poleFlyingToggle.addEventListener('change', drawPoleCanvas);
+
+    // =========================================================================
+    // STEP 3: Top-Down Pole Targeting & State Machine Arena
+    // =========================================================================
+    const ARENA_POLES = [
+      { id: 'P1', x: -160, y: 40, z: 145, exit: false },
+      { id: 'P2', x: 80, y: -60, z: 145, exit: false },
+      { id: 'P3', x: 110, y: 180, z: 145, exit: false },
+      { id: 'P4', x: 350, y: -40, z: 145, exit: false },
+      { id: 'P5', x: 380, y: 200, z: 145, exit: false },
+      { id: 'P6', x: -120, y: -200, z: 145, exit: false },
+      { id: 'Exit_Low', x: 600, y: 60, z: 130, exit: true },
+      { id: 'Exit_Drop', x: -350, y: -150, z: -115, exit: true },
+    ];
+
+    let sim = {
+      x: -420, y: 120, z: 0,
+      angleDeg: -10,
+      state: 'Grounded',
+      timeline: 'None',
+      currentPoleId: null,
+    };
+
+    function simLeftOrRight() {
+      return sim.timeline === 'Idle_L' || sim.timeline === 'Jump_R' || sim.timeline === 'Dash';
+    }
+
+    function selectPoleJS(originX, originY, angleDeg, maxRange, includeExit, preferFarthest, ignoreId) {
+      const rad = (angleDeg * Math.PI) / 180;
+      const fx = Math.cos(rad), fy = Math.sin(rad);
+      const cosThresh = Math.cos((90 * 0.5 * Math.PI) / 180);
+      let best = null;
+      let bestDist = preferFarthest ? -1 : Infinity;
+
+      for (const p of ARENA_POLES) {
+        if (p.id === ignoreId) continue;
+        if (!includeExit && p.exit) continue;
+        const dx = p.x - originX, dy = p.y - originY;
+        const dist = Math.hypot(dx, dy);
+        if (dist > maxRange || dist < 1) continue;
+        const dot = (dx * fx + dy * fy) / dist;
+        if (dot < cosThresh) continue;
+        if (preferFarthest ? dist > bestDist : dist < bestDist) {
+          bestDist = dist;
+          best = p;
+        }
+      }
+      return best;
+    }
+
+    function predictArenaAction(mode) {
+      if (sim.state === 'Grounded') {
+        const p = selectPoleJS(sim.x, sim.y, sim.angleDeg, 500, false, false, null);
+        return p ? { target: p, timeline: 'Dash', nextIdle: 'Idle_L', label: `地面上桩 → Dash → ${p.id}`, fn: ['TryGroundEntry', 866] }
+                 : { target: null, timeline: null, label: '500cm 锥内无普通桩（普通跳跃）', fn: ['FindEnterablePole', 792] };
+      }
+      if (mode === 'dash') {
+        const p = selectPoleJS(sim.x, sim.y, sim.angleDeg, 500, true, true, sim.currentPoleId);
+        if (!p) return { target: null, timeline: null, label: '500cm 锥内无远桩', fn: ['OnDash', 985] };
+        if (p.exit) {
+          const dz = Math.abs(p.z - sim.z);
+          const tl = dz < 200 ? (simLeftOrRight() ? 'JumpToPlatform_L' : 'JumpToPlatform_R') : 'JumpOff';
+          return { target: p, timeline: tl, nextIdle: 'None', label: `远翻至出口 → ${tl}`, fn: ['MoveToPole(Exit)', 1138] };
+        }
+        return { target: p, timeline: 'Dash', nextIdle: 'Idle_L', label: `远翻最远桩 → Dash → ${p.id}`, fn: ['OnDash', 985] };
+      }
+      const near = selectPoleJS(sim.x, sim.y, sim.angleDeg, 350, true, false, sim.currentPoleId);
+      if (near) {
+        if (near.exit) {
+          const dz = Math.abs(near.z - sim.z);
+          const tl = dz < 200 ? (simLeftOrRight() ? 'JumpToPlatform_L' : 'JumpToPlatform_R') : 'JumpOff';
+          return { target: near, timeline: tl, nextIdle: 'None', label: `近跳出口桩 → ${tl}`, fn: ['MoveToPole(Exit)', 1138] };
+        }
+        const tl = simLeftOrRight() ? 'Jump_L' : 'Jump_R';
+        const nextIdle = tl === 'Jump_L' ? 'Idle_R' : 'Idle_L';
+        return { target: near, timeline: tl, nextIdle, label: `350cm 近跳 → ${tl} → ${near.id}`, fn: ['OnMove', 944] };
+      }
+      const fallback = selectPoleJS(sim.x, sim.y, sim.angleDeg, 500, true, true, sim.currentPoleId);
+      if (fallback) {
+        if (fallback.exit) {
+          const dz = Math.abs(fallback.z - sim.z);
+          const tl = dz < 200 ? (simLeftOrRight() ? 'JumpToPlatform_L' : 'JumpToPlatform_R') : 'JumpOff';
+          return { target: fallback, timeline: tl, nextIdle: 'None', label: `350cm无桩 → 回退 OnDash 出口 → ${tl}`, fn: ['OnMove回退OnDash', 982] };
+        }
+        return { target: fallback, timeline: 'Dash', nextIdle: 'Idle_L', label: `350cm无桩 → 自动回退 OnDash → ${fallback.id}`, fn: ['OnMove回退OnDash', 982] };
+      }
+      return { target: null, timeline: null, label: '方向锥内无可选桩', fn: ['SelectPoleActor', 371] };
+    }
+
+    function executeArena(mode) {
+      if (mode === 'jumpoff') {
+        if (sim.state === 'Grounded') return;
+        const rad = (sim.angleDeg * Math.PI) / 180;
+        sim.x += Math.cos(rad) * 180;
+        sim.y += Math.sin(rad) * 180;
+        sim.z = 0;
+        sim.state = 'Grounded';
+        sim.timeline = 'None';
+        sim.currentPoleId = null;
+        drawArenaCanvas();
+        return;
+      }
+      const pred = predictArenaAction(mode);
+      if (!pred.target) return;
+      sim.x = pred.target.x;
+      sim.y = pred.target.y;
+      sim.z = pred.target.z;
+      if (pred.target.exit) {
+        sim.state = 'Grounded';
+        sim.timeline = 'None';
+        sim.currentPoleId = null;
+      } else {
+        sim.state = 'Perched';
+        sim.timeline = pred.nextIdle;
+        sim.currentPoleId = pred.target.id;
+      }
+      drawArenaCanvas();
+    }
+
+    function drawArenaCanvas() {
+      const canvas = document.getElementById('arenaCanvas');
+      const setup = setupCanvas(canvas);
+      if (!setup) return;
+      const { ctx, w, h } = setup;
+      const c = getThemeColors();
+
+      ctx.fillStyle = c.bg;
+      ctx.fillRect(0, 0, w, h);
+
+      const worldMinX = -560, worldMaxX = 720;
+      const worldMinY = -310, worldMaxY = 310;
+      const sx = w / (worldMaxX - worldMinX);
+      const sy = h / (worldMaxY - worldMinY);
+      const s = Math.min(sx, sy);
+      const ox = (w - (worldMaxX - worldMinX) * s) / 2 - worldMinX * s;
+      const oy = (h - (worldMaxY - worldMinY) * s) / 2 - worldMinY * s;
+      const toSX = (wx) => ox + wx * s;
+      const toSY = (wy) => oy + wy * s;
+
+      ctx.strokeStyle = c.border;
+      ctx.globalAlpha = 0.3;
+      ctx.lineWidth = 1;
+      for (let gx = -500; gx <= 700; gx += 100) {
+        ctx.beginPath(); ctx.moveTo(toSX(gx), 0); ctx.lineTo(toSX(gx), h); ctx.stroke();
+      }
+      for (let gy = -300; gy <= 300; gy += 100) {
+        ctx.beginPath(); ctx.moveTo(0, toSY(gy)); ctx.lineTo(w, toSY(gy)); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+
+      const cx = toSX(sim.x), cy = toSY(sim.y);
+      const rad = (sim.angleDeg * Math.PI) / 180;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, 500 * s, rad - Math.PI / 4, rad + Math.PI / 4);
+      ctx.closePath();
+      ctx.fillStyle = c.primary;
+      ctx.globalAlpha = 0.12;
+      ctx.fill();
+      ctx.globalAlpha = 0.65;
+      ctx.strokeStyle = c.primary;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = c.c2;
+      ctx.beginPath(); ctx.arc(cx, cy, 350 * s, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = c.c1;
+      ctx.beginPath(); ctx.arc(cx, cy, 500 * s, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+
+      const predMove = predictArenaAction('move');
+
+      for (const p of ARENA_POLES) {
+        const px = toSX(p.x), py = toSY(p.y);
+        const isCurrent = p.id === sim.currentPoleId;
+        const isTarget = predMove.target && predMove.target.id === p.id;
+
+        if (isTarget) {
+          ctx.strokeStyle = c.primary;
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.lineTo(px, py);
+          ctx.stroke();
+        }
+
+        ctx.save();
+        if (p.exit) {
+          const isLow = Math.abs(p.z - 145) < 200;
+          ctx.fillStyle = isLow ? c.success : c.warning;
+          ctx.translate(px, py);
+          ctx.rotate(Math.PI / 4);
+          ctx.fillRect(-10, -10, 20, 20);
+          if (isTarget) {
+            ctx.strokeStyle = c.fg;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(-14, -14, 28, 28);
+          }
+        } else {
+          ctx.fillStyle = isCurrent ? c.primary : c.c2;
+          ctx.beginPath();
+          ctx.arc(px, py, 12, 0, Math.PI * 2);
+          ctx.fill();
+          if (isTarget) {
+            ctx.strokeStyle = c.fg;
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.arc(px, py, 17, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+        }
+        ctx.restore();
+
+        ctx.fillStyle = c.fg;
+        ctx.font = '12px monospace';
+        ctx.fillText(p.id, px - 14, py + 25);
+      }
+
+      ctx.fillStyle = c.fg;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = c.fg;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(rad) * 24, cy + Math.sin(rad) * 24);
+      ctx.stroke();
+
+      document.getElementById('simAngleVal').textContent = `${Math.round(sim.angleDeg)}°`;
+      document.getElementById('simState').textContent = sim.state;
+      document.getElementById('simTimeline').textContent = sim.timeline;
+      document.getElementById('simFoot').textContent = sim.state === 'Grounded' ? '双脚(地面)' : (simLeftOrRight() ? '左脚 (Left)' : '右脚 (Right)');
+      document.getElementById('simCurPole').textContent = sim.currentPoleId || '地面';
+      document.getElementById('simTargetPole').textContent = predMove.target ? predMove.target.id : '无';
+      document.getElementById('simPredicted').textContent = predMove.label;
+
+      const jumpEl = document.getElementById('simCodeJump');
+      jumpEl.innerHTML = `<span class="text-[var(--muted-foreground)]">对应源码：</span>` +
+        codeLinkHTML('Source/ZeroAnim/PlumPoleTraversalComponent.cpp', predMove.fn[1], predMove.fn[0]) + ' ' +
+        codeLinkHTML('Source/ZeroAnim/PlumPoleTraversalComponent.cpp', 371, 'SelectPoleActor');
+      syncAllCodeLinks(jumpEl);
+    }
+
+    const arenaCanvas = document.getElementById('arenaCanvas');
+    arenaCanvas.addEventListener('mousemove', (e) => {
+      const rect = arenaCanvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const s = Math.min(rect.width / 1280, rect.height / 620);
+      const ox = (rect.width - 1280 * s) / 2 + 560 * s;
+      const oy = (rect.height - 620 * s) / 2 + 310 * s;
+      const cx = ox + sim.x * s;
+      const cy = oy + sim.y * s;
+      sim.angleDeg = (Math.atan2(my - cy, mx - cx) * 180) / Math.PI;
+      document.getElementById('simAngleSlider').value = Math.round(sim.angleDeg);
+      drawArenaCanvas();
+    });
+    arenaCanvas.addEventListener('click', () => executeArena('move'));
+    document.getElementById('simAngleSlider').addEventListener('input', (e) => {
+      sim.angleDeg = Number(e.target.value);
+      drawArenaCanvas();
+    });
+    document.getElementById('simActionMove').addEventListener('click', () => executeArena('move'));
+    document.getElementById('simActionDash').addEventListener('click', () => executeArena('dash'));
+    document.getElementById('simActionJumpOff').addEventListener('click', () => executeArena('jumpoff'));
+    document.getElementById('simReset').addEventListener('click', () => {
+      sim = { x: -420, y: 120, z: 0, angleDeg: -10, state: 'Grounded', timeline: 'None', currentPoleId: null };
+      drawArenaCanvas();
+    });
+
+    // =========================================================================
+    // STEP 4: Timeline Rate Curve & SkewWarp Lab
+    // =========================================================================
+    const TL_SPECS = {
+      Dash: {
+        len: 1.967, defaultStart: 0.0, specLine: 77, curveLine: 260, curveName: 'GetDashRateCurve', motionLine: 1674,
+        rateKeys: [[0, 1.6, 0], [1.3, 1.025, 0]],
+        windows: [
+          { name: 'MoveMode (Flying)', start: 0.236, end: 1.045, col: 'c1' },
+          { name: 'Warp Stage2 (Linear)', start: 0.243, end: 1.093, col: 'c2' },
+          { name: 'Act (可缓冲Dash)', start: 0.452, end: 1.109, col: 'c3' },
+          { name: 'Combo (连跳窗口)', start: 1.109, end: 1.311, col: 'success' },
+          { name: 'AutoIdle → Idle_L', start: 1.325, end: 1.36, col: 'c4' },
+        ],
+        warpStart: 0.243, warpEnd: 1.093, easing: 'linear', rawDist: 420, rawApex: 95,
+      },
+      Jump_L: {
+        len: 2.167, defaultStart: 0.20, specLine: 103, curveLine: 276, curveName: 'GetJumpRateCurve', motionLine: 1674,
+        rateKeys: [[0, 2.0, 0], [0.3, 2.25, 1.75], [0.5, 2.875, -0.417], [0.9, 2.0, -1.85], [1.5, 1.025, 0]],
+        windows: [
+          { name: 'PreJump (可被Dash打断)', start: 0.194, end: 0.500, col: 'c5' },
+          { name: 'Warp Stage1 (纯转向)', start: 0.0, end: 0.499, col: 'c4' },
+          { name: 'MoveMode (Flying)', start: 0.514, end: 1.250, col: 'c1' },
+          { name: 'Warp Stage2 (CircularIn)', start: 0.514, end: 1.249, col: 'c2' },
+          { name: 'Act → Combo (1.201s)', start: 0.513, end: 1.631, col: 'c3' },
+          { name: 'AutoIdle → Idle_R', start: 1.640, end: 1.68, col: 'success' },
+        ],
+        warpStart: 0.514, warpEnd: 1.249, easing: 'circularIn', rawDist: 280, rawApex: 72,
+      },
+      JumpToPlatform_L: {
+        len: 1.917, defaultStart: 0.20, specLine: 167, curveLine: 276, curveName: 'GetJumpRateCurve', motionLine: 1674,
+        rateKeys: [[0, 2.0, 0], [0.3, 2.25, 1.75], [0.5, 2.875, -0.417], [0.9, 2.0, -1.85], [1.5, 1.025, 0]],
+        windows: [
+          { name: 'Warp Stage1 (纯转向)', start: 0.0, end: 0.499, col: 'c4' },
+          { name: 'MoveMode (Flying)', start: 0.514, end: 1.250, col: 'c1' },
+          { name: 'Warp Stage2 (CircularIn)', start: 0.514, end: 1.249, col: 'c2' },
+          { name: 'CamReset (0.899s)', start: 0.899, end: 0.94, col: 'warning' },
+          { name: 'CancelByMove (回地面)', start: 1.262, end: 1.917, col: 'success' },
+          { name: 'AutoBlendOut (0.30s)', start: 1.617, end: 1.917, col: 'c5' },
+        ],
+        warpStart: 0.514, warpEnd: 1.249, easing: 'circularIn', rawDist: 280, rawApex: 72,
+      },
+      JumpOff: {
+        len: 2.533, defaultStart: 0.0, specLine: 207, curveLine: 295, curveName: 'GetJumpOffRateCurve', motionLine: 1845,
+        rateKeys: [[0.3, 1.3, 0], [0.9, 1.0, -0.3], [1.3, 1.0, 0]],
+        windows: [
+          { name: 'RM_Input (720°/s 转向)', start: 0.206, end: 1.342, col: 'c4' },
+          { name: 'GravityScale = 0.5x', start: 0.306, end: 1.045, col: 'c1' },
+          { name: 'CamReset (0.899s)', start: 0.899, end: 0.94, col: 'warning' },
+          { name: 'Act → Combo (1.320s)', start: 0.197, end: 1.520, col: 'c3' },
+          { name: 'CancelByMove (1.525s+)', start: 1.525, end: 2.533, col: 'success' },
+        ],
+        warpStart: 0.28, warpEnd: 1.32, easing: 'gravity', rawDist: 220, rawApex: 85,
+      },
+    };
+
+    let activeTl = 'Dash';
+    let tlTime = 0.65;
+    let tlPlaying = false;
+
+    function evalRichCurve(keys, t) {
+      if (t <= keys[0][0]) return keys[0][1];
+      const last = keys[keys.length - 1];
+      if (t >= last[0]) return last[1];
+      for (let i = 0; i < keys.length - 1; i++) {
+        const [t0, v0, m0] = keys[i];
+        const [t1, v1, m1] = keys[i + 1];
+        if (t >= t0 && t <= t1) {
+          const dt = t1 - t0;
+          const u = (t - t0) / dt;
+          const u2 = u * u, u3 = u2 * u;
+          const h00 = 2 * u3 - 3 * u2 + 1;
+          const h10 = u3 - 2 * u2 + u;
+          const h01 = -2 * u3 + 3 * u2;
+          const h11 = u3 - u2;
+          return h00 * v0 + h10 * m0 * dt + h01 * v1 + h11 * m1 * dt;
+        }
+      }
+      return 1.0;
+    }
+
+    function evalEase(u, mode) {
+      const x = Math.max(0, Math.min(1, u));
+      if (mode === 'circularIn') return 1 - Math.sqrt(1 - x * x);
+      return x;
+    }
+
+    function renderTlSourceLinks() {
+      const spec = TL_SPECS[activeTl];
+      const el = document.getElementById('tlSourceLinks');
+      const rel = 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp';
+      el.innerHTML = `<span class="text-[var(--muted-foreground)]">当前时间轴源码直跳：</span>` +
+        codeLinkHTML(rel, spec.specLine, `${activeTl} Spec`) +
+        codeLinkHTML(rel, spec.curveLine, spec.curveName) +
+        codeLinkHTML(rel, 1323, 'AdvanceActiveTimeline') +
+        codeLinkHTML(rel, spec.motionLine, spec.motionLine === 1845 ? 'ApplyJumpOffMotion' : 'ApplySkewWarpMotion');
+      syncAllCodeLinks(el);
+    }
+
+    function drawTimelineLab() {
+      const spec = TL_SPECS[activeTl];
+      const rate = evalRichCurve(spec.rateKeys, tlTime);
+      document.getElementById('tlTimeReadout').textContent = `${tlTime.toFixed(3)} s`;
+      document.getElementById('tlRateReadout').textContent = `${rate.toFixed(2)}x`;
+
+      let phase = 'None';
+      let cmc = 'MOVE_Walking';
+      if (activeTl === 'Dash') {
+        if (tlTime >= 0.452 && tlTime < 1.109) phase = 'Act';
+        else if (tlTime >= 1.109 && tlTime < 1.311) phase = 'Combo';
+        if (tlTime >= 0.236 && tlTime < 1.045) cmc = 'MOVE_Flying (Ignore WD)';
+        else if (tlTime >= 1.045 && tlTime < 1.325) cmc = 'MOVE_Falling → 落桩';
+      } else if (activeTl === 'Jump_L') {
+        if (tlTime >= 0.194 && tlTime <= 0.500) phase = 'PreJump';
+        else if (tlTime >= 0.513 && tlTime < 1.201) phase = 'Act';
+        else if (tlTime >= 1.201 && tlTime < 1.631) phase = 'Combo';
+        if (tlTime >= 0.514 && tlTime < 1.250) cmc = 'MOVE_Flying (Ignore WD)';
+        else if (tlTime >= 1.250) cmc = 'MOVE_Falling → 落桩';
+      } else if (activeTl === 'JumpToPlatform_L') {
+        if (tlTime >= 0.512 && tlTime < 1.152) phase = 'Act';
+        else if (tlTime >= 1.152 && tlTime < 1.259) phase = 'Combo';
+        else if (tlTime >= 1.259) phase = 'Cancel / MoveExit';
+        if (tlTime >= 0.514 && tlTime < 1.250) cmc = 'MOVE_Flying (Ignore WD)';
+        else if (tlTime >= 1.250) cmc = 'MOVE_Falling → 落地';
+      } else {
+        if (tlTime >= 0.197 && tlTime < 1.320) phase = 'Act';
+        else if (tlTime >= 1.320 && tlTime < 1.520) phase = 'Combo';
+        else if (tlTime >= 1.520) phase = 'Cancel / MoveExit';
+        cmc = (tlTime >= 0.306 && tlTime < 1.045) ? 'MOVE_Falling (Gravity 0.5x)' : 'MOVE_Falling (1.0x)';
+      }
+      document.getElementById('tlPhaseReadout').textContent = phase;
+      document.getElementById('tlCmcReadout').textContent = cmc;
+
+      const c1 = document.getElementById('timelineCanvas');
+      const s1 = setupCanvas(c1);
+      if (s1) {
+        const { ctx, w, h } = s1;
+        const th = getThemeColors();
+        ctx.fillStyle = th.bg;
+        ctx.fillRect(0, 0, w, h);
+
+        const padL = 40, padR = 14, padT = 14;
+        const chartH = 95;
+        const plotW = w - padL - padR;
+        const tx = (t) => padL + (t / spec.len) * plotW;
+        const ry = (r) => padT + chartH - ((r - 0.5) / 2.7) * chartH;
+
+        ctx.strokeStyle = th.border;
+        ctx.lineWidth = 1;
+        for (const rv of [1.0, 2.0, 3.0]) {
+          const y = ry(rv);
+          ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+          ctx.fillStyle = th.muted;
+          ctx.font = '12px monospace';
+          ctx.fillText(`${rv.toFixed(1)}x`, 4, y + 4);
+        }
+
+        ctx.strokeStyle = th.primary;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        for (let i = 0; i <= 100; i++) {
+          const t = (i / 100) * spec.len;
+          const x = tx(t), y = ry(evalRichCurve(spec.rateKeys, t));
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+
+        const tracksTop = padT + chartH + 18;
+        const rowH = Math.min(24, (h - tracksTop - 10) / spec.windows.length);
+        spec.windows.forEach((win, i) => {
+          const y = tracksTop + i * rowH;
+          const x0 = tx(win.start), x1 = Math.max(x0 + 6, tx(win.end));
+          const active = tlTime >= win.start && tlTime <= win.end;
+          const barCol = th[win.col] || th.primary;
+
+          ctx.fillStyle = th.card;
+          ctx.fillRect(padL, y + 2, plotW, rowH - 5);
+
+          ctx.fillStyle = barCol;
+          ctx.globalAlpha = active ? 0.95 : 0.38;
+          ctx.beginPath();
+          ctx.roundRect(x0, y + 2, x1 - x0, rowH - 5, 4);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+
+          ctx.fillStyle = th.fg;
+          ctx.font = '12px sans-serif';
+          ctx.fillText(win.name, padL + 6, y + rowH - 7);
+        });
+
+        const px = tx(tlTime);
+        ctx.strokeStyle = th.error;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(px, padT); ctx.lineTo(px, h - 6); ctx.stroke();
+        ctx.fillStyle = th.error;
+        ctx.beginPath(); ctx.arc(px, ry(rate), 4.5, 0, Math.PI * 2); ctx.fill();
+      }
+
+      const c2 = document.getElementById('warpCanvas');
+      const s2 = setupCanvas(c2);
+      if (s2) {
+        const { ctx, w, h } = s2;
+        const th = getThemeColors();
+        ctx.fillStyle = th.bg;
+        ctx.fillRect(0, 0, w, h);
+
+        const targetDist = Number(document.getElementById('warpDistSlider').value);
+        const targetDz = Number(document.getElementById('warpDzSlider').value);
+        document.getElementById('warpDistVal').textContent = `${targetDist} cm`;
+        document.getElementById('warpDzVal').textContent = `${targetDz >= 0 ? '+' : ''}${targetDz} cm`;
+
+        const baseX = 48;
+        const baseY = h * 0.64;
+        const pxPerCmX = (w - 96) / 540;
+        const pxPerCmY = 0.42;
+
+        ctx.fillStyle = th.border;
+        ctx.fillRect(baseX - 10, baseY, 20, h - baseY);
+        ctx.fillStyle = th.fg;
+        ctx.font = '12px sans-serif';
+        ctx.fillText('起跳点', baseX - 18, baseY + 18);
+
+        const txEnd = baseX + targetDist * pxPerCmX;
+        const tyEnd = baseY - targetDz * pxPerCmY;
+        ctx.fillStyle = th.c2;
+        ctx.fillRect(txEnd - 10, tyEnd, 20, h - tyEnd);
+        ctx.fillStyle = th.fg;
+        ctx.fillText('目标 StandPoint', Math.min(w - 96, txEnd - 40), tyEnd + 18);
+
+        ctx.save();
+        ctx.setLineDash([5, 4]);
+        ctx.strokeStyle = th.muted;
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        for (let i = 0; i <= 40; i++) {
+          const u = i / 40;
+          const rx = baseX + (spec.rawDist * u) * pxPerCmX;
+          const rz = Math.sin(u * Math.PI) * spec.rawApex;
+          const ry = baseY - rz * pxPerCmY;
+          if (i === 0) ctx.moveTo(rx, ry); else ctx.lineTo(rx, ry);
+        }
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.strokeStyle = th.primary;
+        ctx.lineWidth = 2.8;
+        ctx.beginPath();
+        for (let i = 0; i <= 50; i++) {
+          const u = i / 50;
+          const easeU = evalEase(u, spec.easing);
+          const wx = baseX + (targetDist * u) * pxPerCmX;
+          const rawZ = Math.sin(u * Math.PI) * spec.rawApex;
+          const wz = spec.easing === 'gravity'
+            ? rawZ - (u * u) * Math.max(0, -targetDz + 120)
+            : rawZ + targetDz * easeU;
+          const wy = baseY - wz * pxPerCmY;
+          if (i === 0) ctx.moveTo(wx, wy); else ctx.lineTo(wx, wy);
+        }
+        ctx.stroke();
+
+        const uNow = Math.max(0, Math.min(1, (tlTime - spec.warpStart) / Math.max(0.01, spec.warpEnd - spec.warpStart)));
+        const easeNow = evalEase(uNow, spec.easing);
+        const curX = baseX + (targetDist * uNow) * pxPerCmX;
+        const rawZNow = Math.sin(uNow * Math.PI) * spec.rawApex;
+        const curZ = spec.easing === 'gravity'
+          ? rawZNow - (uNow * uNow) * Math.max(0, -targetDz + 120)
+          : rawZNow + targetDz * easeNow;
+        const curY = baseY - curZ * pxPerCmY;
+
+        ctx.fillStyle = th.error;
+        ctx.beginPath();
+        ctx.arc(curX, curY, 6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    document.querySelectorAll('.tl-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        activeTl = btn.dataset.tl;
+        const spec = TL_SPECS[activeTl];
+        const scrub = document.getElementById('tlScrub');
+        scrub.max = spec.len.toFixed(3);
+        tlTime = spec.defaultStart;
+        scrub.value = tlTime.toFixed(3);
+        document.querySelectorAll('.tl-btn').forEach((b) => { b.dataset.active = b.dataset.tl === activeTl ? 'true' : 'false'; });
+        renderTlSourceLinks();
+        drawTimelineLab();
+      });
+    });
+    document.getElementById('tlScrub').addEventListener('input', (e) => {
+      tlTime = Number(e.target.value);
+      drawTimelineLab();
+    });
+    document.getElementById('warpDistSlider').addEventListener('input', drawTimelineLab);
+    document.getElementById('warpDzSlider').addEventListener('input', drawTimelineLab);
+    document.getElementById('tlPlayBtn').addEventListener('click', () => {
+      tlPlaying = !tlPlaying;
+      document.getElementById('tlPlayBtn').textContent = tlPlaying ? '⏸ 暂停' : '▶ 播放';
+    });
+    renderTlSourceLinks();
+
+    // =========================================================================
+    // STEP 5: Character Blueprint Input Router
+    // =========================================================================
+    let inputCtx = 'ground_far';
+    let lastSimKey = 'jump';
+
+    function getInputRouteHTML(ctxKey, keyName) {
+      const ch = 'Source/ZeroAnim/PlumPoleCharacter.cpp';
+      const chIn = 'Source/ZeroAnim/PlumPoleCharacterInput.cpp';
+      const tr = 'Source/ZeroAnim/PlumPoleTraversalComponent.cpp';
+      const routes = {
+        ground_far: {
+          jump: `<strong>调用链：</strong>模板 <code>IA_Jump</code> → ${codeLinkHTML(ch, 701, 'APlumPoleCharacter::Jump')} → ${codeLinkHTML(tr, 844, 'TryTraverse')} → ${codeLinkHTML(tr, 792, 'FindEnterablePole')} 返回 <code>nullptr</code> → 回退执行 <strong><code>Super::Jump()</code>（原版第三人称普通跳跃）</strong>。`,
+          move: `<strong>调用链：</strong>模板 <code>IA_Move</code> 同时触发蓝图 <code>AddMovementInput()</code> 和 ${codeLinkHTML(chIn, 156, 'HandlePoleMoveInput')} → ${codeLinkHTML(tr, 909, 'OnMove2D')} 见 <code>bPoleAbilityActive == false</code> 直接返回 → <strong>完全走原版地面跑动</strong>。`,
+          flip: `<strong>调用链：</strong><code>IMC_PlumPole</code> 触发 <code>IA_PoleFlip</code> → ${codeLinkHTML(chIn, 151, 'HandlePoleFlipInput')} → ${codeLinkHTML(tr, 985, 'OnDash')} 见 <code>!bPoleAbilityActive</code> 直接忽略 → 不干扰地面操作。`,
+        },
+        ground_near: {
+          jump: `<strong>调用链：</strong>模板 <code>IA_Jump</code> → ${codeLinkHTML(ch, 701, 'Jump')} → ${codeLinkHTML(tr, 866, 'TryGroundEntry')} 命中 500cm 内桩 → ${codeLinkHTML(tr, 1034, 'ActivatePoleAbility')} 锁死 CMC 并触发镜头 ${codeLinkHTML(ch, 406, '+300cm')} → ${codeLinkHTML(tr, 1122, 'MoveToPole')} 播 <strong>Dash 飞身上桩</strong>！`,
+          move: `<strong>调用链：</strong>仍在地面，走原版 <code>AddMovementInput()</code>；每帧 ${codeLinkHTML(ch, 485, 'UpdateInteractPrompt')} 探测到 500cm 内可上桩，将桩顶 UI 切换为 <strong>InputAction（Space / A 键）</strong>。`,
+          flip: `<strong>调用链：</strong>${codeLinkHTML(tr, 985, 'OnDash')} 仅在已上桩（<code>bPoleAbilityActive == true</code>）时生效，地面上桩统一由 <code>Jump</code> 触发。`,
+        },
+        on_pole: {
+          jump: `<strong>调用链：</strong><code>IA_Jump</code> → ${codeLinkHTML(ch, 701, 'Jump')} → ${codeLinkHTML(tr, 857, 'TryTraverse')} → ${codeLinkHTML(tr, 888, 'TryActiveJumpOff')} 检查 <code>AllowJumpOut && !Protect && CanMove()</code> → 通过则播 <strong>JumpOff 翻身跳落</strong>；绝不会误触普通跳跃。`,
+          move: `<strong>调用链：</strong>模板 <code>AddMovementInput()</code> 因 ${codeLinkHTML(tr, 1957, 'MaxWalkSpeed=0')} 安全空转；${codeLinkHTML(chIn, 156, 'HandlePoleMoveInput')} → ${codeLinkHTML(tr, 909, 'OnMove2D')} → ${codeLinkHTML(tr, 944, 'OnMove')} 找 350cm 近桩播 <strong>Jump_L/R</strong>，无近桩则在 ${codeLinkHTML(tr, 982, 'PlumPoleTraversalComponent.cpp')} 自动回退 ${codeLinkHTML(tr, 985, 'OnDash')}！`,
+          flip: `<strong>调用链：</strong><code>IA_PoleFlip</code> → ${codeLinkHTML(chIn, 151, 'HandlePoleFlipInput')} → ${codeLinkHTML(tr, 861, 'TryPoleFlip')} → ${codeLinkHTML(tr, 985, 'OnDash')} 选 500cm <strong>最远桩</strong>播 <strong>Dash</strong>；<code>PreJump</code> 期直接打断，<code>Act</code> 期写入 ${codeLinkHTML(tr, 998, 'bBufferedDash')} 缓冲！`,
+        },
+      };
+      return routes[ctxKey][keyName];
+    }
+
+    function renderInputRoute() {
+      const ctxLabels = { ground_far: '地面 (远离桩)', ground_near: '地面 (500cm 内有桩)', on_pole: '站在梅花桩上' };
+      const keyLabels = { jump: 'Space (IA_Jump)', move: 'WASD (IA_Move)', flip: 'Shift (IA_PoleFlip)' };
+      const out = document.getElementById('inputRouteOutput');
+      out.innerHTML = `
+        <div class="flex flex-wrap items-center gap-2 pb-1.5 border-b border-[var(--border)]">
+          <span class="badge-chip">状态：${ctxLabels[inputCtx]}</span>
+          <span class="badge-chip">按键：${keyLabels[lastSimKey]}</span>
+        </div>
+        <div class="text-[var(--foreground)]">${getInputRouteHTML(inputCtx, lastSimKey)}</div>
+      `;
+      syncAllCodeLinks(out);
+    }
+
+    document.querySelectorAll('.input-ctx-btn').forEach((b) => {
+      b.addEventListener('click', () => {
+        inputCtx = b.dataset.ctx;
+        document.querySelectorAll('.input-ctx-btn').forEach((x) => { x.dataset.active = x.dataset.ctx === inputCtx ? 'true' : 'false'; });
+        renderInputRoute();
+      });
+    });
+    document.querySelectorAll('.key-sim-btn').forEach((b) => {
+      b.addEventListener('click', () => { lastSimKey = b.dataset.key; renderInputRoute(); });
+    });
+    renderInputRoute();
+
+    // =========================================================================
+    // STEP 6: AnimInstanceProxy Multi-Layer Pose Blender Simulator
+    // =========================================================================
+    const PROXY_CLIPS = {
+      Dash:             { blendIn: 0.25, col: 'c1', label: 'Dash (Hermite 0.25s)' },
+      Idle_L:           { blendIn: 0.50, col: 'c2', label: 'Idle_L (Hermite 0.50s)' },
+      Jump_L:           { blendIn: 0.15, col: 'c3', label: 'Jump_L (CircularIn 0.15s)' },
+      Jump_R:           { blendIn: 0.15, col: 'c4', label: 'Jump_R (CircularIn 0.15s)' },
+      JumpToPlatform_L: { blendIn: 0.15, col: 'c5', label: 'JumpToPlatform (0.15s)' },
+      None:             { blendIn: 0.30, col: 'success', label: 'Ground BasePose (0.30s)' },
+    };
+
+    let proxyCurrent = { name: 'None', w: 1, startW: 1, targetW: 1, elapsed: 1, dur: 0.01 };
+    let proxyOutgoing = [];
+
+    function triggerProxyClip(name) {
+      const cfg = PROXY_CLIPS[name];
+      if (proxyCurrent.name === name && proxyOutgoing.length === 0) return;
+
+      const outDur = name === 'None' ? 0.30 : cfg.blendIn;
+      if (proxyCurrent.w > 0.01) {
+        proxyOutgoing.push({
+          name: proxyCurrent.name,
+          w: proxyCurrent.w,
+          startW: proxyCurrent.w,
+          targetW: 0,
+          elapsed: 0,
+          dur: outDur,
+        });
+        if (proxyOutgoing.length > 6) proxyOutgoing.shift();
+      }
+      proxyCurrent = { name, w: 0, startW: 0, targetW: 1, elapsed: 0, dur: cfg.blendIn };
+      drawProxyCanvas();
+    }
+
+    function stepProxy(dt) {
+      const adv = (layer) => {
+        if (layer.elapsed < layer.dur) {
+          layer.elapsed = Math.min(layer.dur, layer.elapsed + dt);
+          const u = layer.elapsed / Math.max(0.001, layer.dur);
+          const smooth = u * u * (3 - 2 * u);
+          layer.w = layer.startW + (layer.targetW - layer.startW) * smooth;
+        }
+      };
+      adv(proxyCurrent);
+      for (let i = proxyOutgoing.length - 1; i >= 0; i--) {
+        adv(proxyOutgoing[i]);
+        if (proxyOutgoing[i].elapsed >= proxyOutgoing[i].dur && proxyOutgoing[i].w <= 0.001) {
+          proxyOutgoing.splice(i, 1);
+        }
+      }
+    }
+
+    function drawProxyCanvas() {
+      const canvas = document.getElementById('proxyCanvas');
+      const setup = setupCanvas(canvas);
+      if (!setup) return;
+      const { ctx, w, h } = setup;
+      const th = getThemeColors();
+
+      ctx.fillStyle = th.bg;
+      ctx.fillRect(0, 0, w, h);
+
+      const layers = [...proxyOutgoing.map((l, i) => ({ ...l, role: `Outgoing[${i}] (淡出 1.0x)` })), { ...proxyCurrent, role: 'Current (活跃主层)' }];
+      const totalW = layers.reduce((acc, l) => acc + Math.max(0, l.w), 0) || 1;
+
+      const padX = 16, startY = 18;
+      const rowH = Math.min(34, (h - 54) / Math.max(1, layers.length));
+
+      layers.forEach((l, i) => {
+        const y = startY + i * rowH;
+        const share = Math.max(0, l.w) / totalW;
+        const cfg = PROXY_CLIPS[l.name] || PROXY_CLIPS.None;
+        const barCol = th[cfg.col] || th.primary;
+
+        ctx.fillStyle = th.card;
+        ctx.beginPath();
+        ctx.roundRect(padX, y, w - padX * 2, rowH - 8, 5);
+        ctx.fill();
+
+        ctx.fillStyle = barCol;
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.roundRect(padX, y, Math.max(4, (w - padX * 2) * share), rowH - 8, 5);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+
+        ctx.fillStyle = th.fg;
+        ctx.font = '12px monospace';
+        ctx.fillText(`${l.role}: ${l.name === 'None' ? 'BasePose (ABP_Unarmed)' : l.name}  —  权重 ${(share * 100).toFixed(0)}%`, padX + 8, y + rowH - 14);
+      });
+
+      const footY = h - 28;
+      let cursorX = padX;
+      const fullW = w - padX * 2;
+      layers.forEach((l) => {
+        const share = Math.max(0, l.w) / totalW;
+        const segW = fullW * share;
+        const cfg = PROXY_CLIPS[l.name] || PROXY_CLIPS.None;
+        ctx.fillStyle = th[cfg.col] || th.primary;
+        ctx.fillRect(cursorX, footY, segW, 14);
+        cursorX += segW;
+      });
+      ctx.strokeStyle = th.border;
+      ctx.strokeRect(padX, footY, fullW, 14);
+
+      const onPole = proxyCurrent.name !== 'None';
+      document.getElementById('proxyCur').textContent = onPole ? proxyCurrent.name : 'Ground (BasePose)';
+      document.getElementById('proxyOutCount').textContent = `${proxyOutgoing.length} / 6`;
+      document.getElementById('proxyDisableIK').textContent = onPole ? 'true' : 'false';
+      const ikEl = document.getElementById('proxyIKAlpha');
+      ikEl.textContent = onPole ? '0.00 (已关闭 FootIK)' : '1.00 (正常地面 FootIK)';
+      ikEl.style.color = onPole ? th.warning : th.success;
+    }
+
+    document.querySelectorAll('.proxy-btn').forEach((b) => b.addEventListener('click', () => triggerProxyClip(b.dataset.clip)));
+
+    // =========================================================================
+    // STEP 7: Interactive Checklist with Exact Relative Links
+    // =========================================================================
+    const CHECK_ITEMS = [
+      { txt: 'Build.cs 已加入 EnhancedInput / UMG / Slate / SlateCore / InputCore', rel: 'Source/ZeroAnim/ZeroAnim.Build.cs', line: 10 },
+      { txt: '已创建 IA_PoleFlip (Boolean) 与 IMC_PlumPole 并配置绑定', rel: 'Source/ZeroAnim/PlumPoleCharacterInput.cpp', line: 105 },
+      { txt: '8 条时间轴动画均基于同骨骼且保留完整 Root 位移轨道', rel: 'Source/ZeroAnim/PlumPoleCharacter.cpp', line: 71 },
+      { txt: '已实现 APlumPoleActor（BlockAllDynamic + StandPoint WarpTarget）', rel: 'Source/ZeroAnim/PlumPoleActor.cpp', line: 23 },
+      { txt: '已实现 UPlumPoleTraversalComponent 并挂载到 APlumPoleCharacter', rel: 'Source/ZeroAnim/PlumPoleTraversalComponent.h', line: 105 },
+      { txt: 'BP_SoulThirdPerson 已 Reparent 为 APlumPoleCharacter，原输入蓝图未删', rel: 'Source/ZeroAnim/PlumPoleCharacter.h', line: 64 },
+      { txt: 'BP_SoulThirdPerson 已配置 IMC_PlumPole / IA_PoleFlip / PromptWidget', rel: 'Source/ZeroAnim/PlumPoleCharacter.h', line: 130 },
+      { txt: 'ABP_PlumPoleManny 复制自 ABP_Unarmed 并 Reparent 为 UPlumPoleAnimInstance', rel: 'Source/ZeroAnim/PlumPoleAnimInstance.h', line: 22 },
+      { txt: 'ABP_PlumPoleManny 已将 LegIKAlpha 和 NOT bDisableLegIK 连到 FootIK', rel: 'Source/ZeroAnim/PlumPoleAnimInstance.h', line: 29 },
+      { txt: 'BP_PlumPoleGameMode 已设 DefaultPawn 并在关卡摆桩实测通过', rel: 'Config/DefaultEngine.ini', line: 7 },
+    ];
+    const checkState = CHECK_ITEMS.map(() => false);
+    const checkBoxContainer = document.getElementById('checklistContainer');
+
+    function renderChecklist() {
+      checkBoxContainer.innerHTML = '';
+      CHECK_ITEMS.forEach((item, i) => {
+        const row = document.createElement('div');
+        row.className = 'flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg bg-[var(--content)] border border-[var(--border)]';
+        const shortFile = item.rel.split('/').pop();
+        row.innerHTML = `
+          <label class="flex items-start gap-2 cursor-pointer flex-1 min-w-[200px]">
+            <input type="checkbox" ${checkState[i] ? 'checked' : ''} class="mt-0.5 accent-[var(--primary)]" />
+            <span class="${checkState[i] ? 'line-through text-[var(--muted-foreground)]' : 'text-[var(--foreground)]'}">${i + 1}. ${item.txt}</span>
+          </label>
+          ${codeLinkHTML(item.rel, item.line, shortFile)}
+        `;
+        row.querySelector('input').addEventListener('change', (e) => {
+          checkState[i] = e.target.checked;
+          renderChecklist();
+        });
+        checkBoxContainer.appendChild(row);
+      });
+      syncAllCodeLinks(checkBoxContainer);
+      const done = checkState.filter(Boolean).length;
+      document.getElementById('checkScore').textContent = `${done} / ${CHECK_ITEMS.length}`;
+    }
+    renderChecklist();
+
+    // =========================================================================
+    // Main Animation Loop
+    // =========================================================================
+    let lastFrameTs = performance.now();
+    function tickLoop(ts) {
+      const dt = Math.min(0.05, (ts - lastFrameTs) / 1000);
+      lastFrameTs = ts;
+
+      if (currentStep === 4 && tlPlaying) {
+        const spec = TL_SPECS[activeTl];
+        const rate = evalRichCurve(spec.rateKeys, tlTime);
+        tlTime += dt * rate;
+        if (tlTime >= spec.len) tlTime = spec.defaultStart;
+        document.getElementById('tlScrub').value = tlTime.toFixed(3);
+        drawTimelineLab();
+      }
+      if (currentStep === 6) {
+        const needAnim = proxyCurrent.elapsed < proxyCurrent.dur || proxyOutgoing.length > 0;
+        if (needAnim) {
+          stepProxy(dt);
+          drawProxyCanvas();
+        }
+      }
+      requestAnimationFrame(tickLoop);
+    }
+
+    function redrawVisibleCanvases() {
+      if (currentStep === 2) drawPoleCanvas();
+      if (currentStep === 3) drawArenaCanvas();
+      if (currentStep === 4) drawTimelineLab();
+      if (currentStep === 6) drawProxyCanvas();
+    }
+
+    // Theme toggle button wiring
+    const themeToggleBtn = document.getElementById('themeToggleBtn');
+    function refreshThemeToggleLabel() {
+      const isLight = document.documentElement.classList.contains('light');
+      themeToggleBtn.textContent = isLight ? '🌙 切换深色' : '☀️ 切换浅色';
+      themeToggleBtn.title = isLight ? '切换到暖炭护眼深色模式' : '切换到暖纸护眼浅色模式';
+    }
+    themeToggleBtn.addEventListener('click', () => {
+      const isLight = document.documentElement.classList.contains('light');
+      window.applyTutorialTheme(isLight ? 'dark' : 'light', true);
+      refreshThemeToggleLabel();
+    });
+    refreshThemeToggleLabel();
+
+    window.addEventListener('resize', redrawVisibleCanvases);
+    window.addEventListener('themechange', () => {
+      refreshThemeToggleLabel();
+      redrawVisibleCanvases();
+    });
+
+    // Initialize
+    syncAllCodeLinks();
+    goToStep(0);
+    requestAnimationFrame(tickLoop);
+  </script>
+</body>
+</html>
